@@ -3,5 +3,5 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  base: '/jss-warranty-mis/',
+  base: '/jss-warranty-mis-demo/',
 });
