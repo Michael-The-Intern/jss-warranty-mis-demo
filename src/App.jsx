@@ -2305,6 +2305,9 @@ function riRelIndicator(rec){
   const short = {supersedes:'Supersedes',supersededBy:'Superseded by',expands:'Expands',expandedBy:'Expanded by'};
   return types.map(t=>short[t]||t).join(' · ');
 }
+function getNhtsaRecallUrl(nhtsaId) {
+  return `https://www.nhtsa.gov/recalls?nhtsaId=${encodeURIComponent(nhtsaId)}`;
+}
 
 function RI_KPI({label,value,sub,accent}){
   return (
@@ -2359,8 +2362,8 @@ function RecallDetail({rec,onClose}){
           <KV k="Manufacturer Campaign(s)" v={rec.mfrCampaignNumbers.length?rec.mfrCampaignNumbers.join(', '):rec.mfrCampaignNumberRaw}/>
           <KV k="Recall Type" v={rec.recallType}/>
           <KV k="Report Received" v={rec.reportReceivedDate}/>
-          <KV k="Source Link" v={rec.recallLink
-            ? <a href={rec.recallLink} target="_blank" rel="noopener noreferrer" style={{color:C.coral,textDecoration:'underline'}}>{rec.recallLink}</a>
+          <KV k="Source Link" v={rec.nhtsaId
+            ? <a href={getNhtsaRecallUrl(rec.nhtsaId)} target="_blank" rel="noopener noreferrer" style={{color:C.coral,textDecoration:'underline'}}>View on NHTSA.gov</a>
             : '—'}/>
         </Section>
 
@@ -2583,8 +2586,8 @@ function RecallIntelligence(){
                       </td>
                       <td style={{padding:'9px 12px',fontSize:'11px',color:C.amber}}>{rel||''}</td>
                       <td style={{padding:'9px 12px'}}>
-                        {r.recallLink
-                          ? <a href={r.recallLink} target="_blank" rel="noopener noreferrer"
+                        {r.nhtsaId
+                          ? <a href={getNhtsaRecallUrl(r.nhtsaId)} target="_blank" rel="noopener noreferrer"
                               onClick={e=>e.stopPropagation()}
                               style={{color:C.coral,textDecoration:'underline',fontSize:'11.5px'}}>NHTSA →</a>
                           : '—'}
