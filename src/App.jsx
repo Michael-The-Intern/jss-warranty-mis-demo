@@ -3140,6 +3140,1092 @@ function GMBreakdown({title, data}) {
 }
 
 
+const STLA_CAMPAIGNS = [
+  {
+    "campaignNumber": "4551",
+    "customer": "Stellantis",
+    "plant": "Demo Assembly Plant",
+    "modelYear": 2018,
+    "claimClassification": "Synthetic inflator recovery demonstration",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "status": "Recovery Review",
+    "dataClassification": "SYNTHETIC"
+  },
+  {
+    "campaignNumber": "4750",
+    "customer": "Stellantis",
+    "plant": "Demo Assembly Plant",
+    "modelYear": 2019,
+    "claimClassification": "Synthetic inflator recovery demonstration",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "status": "Allocation Review",
+    "dataClassification": "SYNTHETIC"
+  }
+];
+
+const STLA_SWRS_GROUPS = [
+  {
+    "id": "SWRS-DEMO-4551-A",
+    "campaignNumber": "4551",
+    "label": "SWRS Group A",
+    "reviewStatus": "Reconciled"
+  },
+  {
+    "id": "SWRS-DEMO-4551-B",
+    "campaignNumber": "4551",
+    "label": "SWRS Group B",
+    "reviewStatus": "Review Required"
+  },
+  {
+    "id": "SWRS-DEMO-4551-C",
+    "campaignNumber": "4551",
+    "label": "SWRS Group C",
+    "reviewStatus": "Pending Allocation"
+  },
+  {
+    "id": "SWRS-DEMO-4750-A",
+    "campaignNumber": "4750",
+    "label": "SWRS Group A",
+    "reviewStatus": "Reconciled"
+  },
+  {
+    "id": "SWRS-DEMO-4750-B",
+    "campaignNumber": "4750",
+    "label": "SWRS Group B",
+    "reviewStatus": "Review Required"
+  },
+  {
+    "id": "SWRS-DEMO-4750-C",
+    "campaignNumber": "4750",
+    "label": "SWRS Group C",
+    "reviewStatus": "Pending Allocation"
+  }
+];
+
+const STLA_DEBITS = [
+  {
+    "id": "DEMO-DB-4551-C-A",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-A",
+    "market": "C",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 561.75,
+    "reviewStatus": "Reconciled"
+  },
+  {
+    "id": "DEMO-DB-4551-U-A",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-A",
+    "market": "U",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 306.3,
+    "reviewStatus": "Review Required"
+  },
+  {
+    "id": "DEMO-DB-4551-C-B",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-B",
+    "market": "C",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 897.0,
+    "reviewStatus": "Pending Allocation"
+  },
+  {
+    "id": "DEMO-DB-4551-U-B",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-B",
+    "market": "U",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 505.2,
+    "reviewStatus": "Reconciled"
+  },
+  {
+    "id": "DEMO-DB-4551-C-C",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-C",
+    "market": "C",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 1232.25,
+    "reviewStatus": "Review Required"
+  },
+  {
+    "id": "DEMO-DB-4551-U-C",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-C",
+    "market": "U",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 704.1,
+    "reviewStatus": "Pending Allocation"
+  },
+  {
+    "id": "DEMO-DB-4750-C-A",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-A",
+    "market": "C",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 576.75,
+    "reviewStatus": "Reconciled"
+  },
+  {
+    "id": "DEMO-DB-4750-U-A",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-A",
+    "market": "U",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 321.3,
+    "reviewStatus": "Review Required"
+  },
+  {
+    "id": "DEMO-DB-4750-C-B",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-B",
+    "market": "C",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 912.0,
+    "reviewStatus": "Pending Allocation"
+  },
+  {
+    "id": "DEMO-DB-4750-U-B",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-B",
+    "market": "U",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 520.2,
+    "reviewStatus": "Reconciled"
+  },
+  {
+    "id": "DEMO-DB-4750-C-C",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-C",
+    "market": "C",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 1247.25,
+    "reviewStatus": "Review Required"
+  },
+  {
+    "id": "DEMO-DB-4750-U-C",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-C",
+    "market": "U",
+    "billingCycle": "2026-06",
+    "currency": "USD",
+    "billableAmount": 719.1,
+    "reviewStatus": "Pending Allocation"
+  }
+];
+
+const STLA_CLAIMS = [
+  {
+    "id": "CLM-4551-001",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-A",
+    "displayVin": "DEMO-VIN-4551-001",
+    "claimNumber": "STLA-DEMO-4551-001",
+    "modelYear": 2018,
+    "familyCode": "DEMO-DS",
+    "failedPart": "DEMO-PART-A",
+    "otherParts": "DEMO-PART-B",
+    "quantity": 1,
+    "causalLop": "DEMO-LOP-01",
+    "market": "C",
+    "repairDate": "2025-10-01",
+    "adjustedPartExpense": 150.0,
+    "adjustedLopExpense": 80.0
+  },
+  {
+    "id": "CLM-4551-002",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-A",
+    "displayVin": "DEMO-VIN-4551-002",
+    "claimNumber": "STLA-DEMO-4551-002",
+    "modelYear": 2018,
+    "familyCode": "DEMO-DJ",
+    "failedPart": "DEMO-PART-B",
+    "otherParts": "DEMO-PART-C",
+    "quantity": 2,
+    "causalLop": "DEMO-LOP-02",
+    "market": "U",
+    "repairDate": "2025-11-02",
+    "adjustedPartExpense": 187.25,
+    "adjustedLopExpense": 102.1
+  },
+  {
+    "id": "CLM-4551-003",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-A",
+    "displayVin": "DEMO-VIN-4551-003",
+    "claimNumber": "STLA-DEMO-4551-003",
+    "modelYear": 2018,
+    "familyCode": "DEMO-D2",
+    "failedPart": "DEMO-PART-C",
+    "otherParts": "DEMO-PART-D",
+    "quantity": 3,
+    "causalLop": "DEMO-LOP-03",
+    "market": "C",
+    "repairDate": "2025-12-03",
+    "adjustedPartExpense": 224.5,
+    "adjustedLopExpense": 124.2
+  },
+  {
+    "id": "CLM-4551-004",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-B",
+    "displayVin": "DEMO-VIN-4551-004",
+    "claimNumber": "STLA-DEMO-4551-004",
+    "modelYear": 2018,
+    "familyCode": "DEMO-DJ",
+    "failedPart": "DEMO-PART-D",
+    "otherParts": "DEMO-PART-A",
+    "quantity": 2,
+    "causalLop": "DEMO-LOP-02",
+    "market": "U",
+    "repairDate": "2026-01-04",
+    "adjustedPartExpense": 261.75,
+    "adjustedLopExpense": 146.3
+  },
+  {
+    "id": "CLM-4551-005",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-B",
+    "displayVin": "DEMO-VIN-4551-005",
+    "claimNumber": "STLA-DEMO-4551-005",
+    "modelYear": 2018,
+    "familyCode": "DEMO-D2",
+    "failedPart": "DEMO-PART-A",
+    "otherParts": "DEMO-PART-B",
+    "quantity": 3,
+    "causalLop": "DEMO-LOP-03",
+    "market": "C",
+    "repairDate": "2026-02-05",
+    "adjustedPartExpense": 299.0,
+    "adjustedLopExpense": 168.4
+  },
+  {
+    "id": "CLM-4551-006",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-B",
+    "displayVin": "DEMO-VIN-4551-006",
+    "claimNumber": "STLA-DEMO-4551-006",
+    "modelYear": 2018,
+    "familyCode": "DEMO-DS",
+    "failedPart": "DEMO-PART-B",
+    "otherParts": "DEMO-PART-C",
+    "quantity": 4,
+    "causalLop": "DEMO-LOP-01",
+    "market": "U",
+    "repairDate": "2026-03-06",
+    "adjustedPartExpense": 336.25,
+    "adjustedLopExpense": 190.5
+  },
+  {
+    "id": "CLM-4551-007",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-C",
+    "displayVin": "DEMO-VIN-4551-007",
+    "claimNumber": "STLA-DEMO-4551-007",
+    "modelYear": 2018,
+    "familyCode": "DEMO-D2",
+    "failedPart": "DEMO-PART-C",
+    "otherParts": "DEMO-PART-D",
+    "quantity": 3,
+    "causalLop": "DEMO-LOP-03",
+    "market": "C",
+    "repairDate": "2026-04-07",
+    "adjustedPartExpense": 373.5,
+    "adjustedLopExpense": 212.6
+  },
+  {
+    "id": "CLM-4551-008",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-C",
+    "displayVin": "DEMO-VIN-4551-008",
+    "claimNumber": "STLA-DEMO-4551-008",
+    "modelYear": 2018,
+    "familyCode": "DEMO-DS",
+    "failedPart": "DEMO-PART-D",
+    "otherParts": "DEMO-PART-A",
+    "quantity": 4,
+    "causalLop": "DEMO-LOP-01",
+    "market": "U",
+    "repairDate": "2026-05-08",
+    "adjustedPartExpense": 410.75,
+    "adjustedLopExpense": 234.7
+  },
+  {
+    "id": "CLM-4551-009",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-C",
+    "displayVin": "DEMO-VIN-4551-009",
+    "claimNumber": "STLA-DEMO-4551-009",
+    "modelYear": 2018,
+    "familyCode": "DEMO-DJ",
+    "failedPart": "DEMO-PART-A",
+    "otherParts": "DEMO-PART-B",
+    "quantity": 5,
+    "causalLop": "DEMO-LOP-02",
+    "market": "C",
+    "repairDate": "2026-06-09",
+    "adjustedPartExpense": 448.0,
+    "adjustedLopExpense": 256.8
+  },
+  {
+    "id": "CLM-4750-001",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-A",
+    "displayVin": "DEMO-VIN-4750-001",
+    "claimNumber": "STLA-DEMO-4750-001",
+    "modelYear": 2019,
+    "familyCode": "DEMO-DS",
+    "failedPart": "DEMO-PART-A",
+    "otherParts": "DEMO-PART-B",
+    "quantity": 1,
+    "causalLop": "DEMO-LOP-01",
+    "market": "C",
+    "repairDate": "2025-10-01",
+    "adjustedPartExpense": 150.0,
+    "adjustedLopExpense": 80.0
+  },
+  {
+    "id": "CLM-4750-002",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-A",
+    "displayVin": "DEMO-VIN-4750-002",
+    "claimNumber": "STLA-DEMO-4750-002",
+    "modelYear": 2019,
+    "familyCode": "DEMO-DJ",
+    "failedPart": "DEMO-PART-B",
+    "otherParts": "DEMO-PART-C",
+    "quantity": 2,
+    "causalLop": "DEMO-LOP-02",
+    "market": "U",
+    "repairDate": "2025-11-02",
+    "adjustedPartExpense": 187.25,
+    "adjustedLopExpense": 102.1
+  },
+  {
+    "id": "CLM-4750-003",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-A",
+    "displayVin": "DEMO-VIN-4750-003",
+    "claimNumber": "STLA-DEMO-4750-003",
+    "modelYear": 2019,
+    "familyCode": "DEMO-D2",
+    "failedPart": "DEMO-PART-C",
+    "otherParts": "DEMO-PART-D",
+    "quantity": 3,
+    "causalLop": "DEMO-LOP-03",
+    "market": "C",
+    "repairDate": "2025-12-03",
+    "adjustedPartExpense": 224.5,
+    "adjustedLopExpense": 124.2
+  },
+  {
+    "id": "CLM-4750-004",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-B",
+    "displayVin": "DEMO-VIN-4750-004",
+    "claimNumber": "STLA-DEMO-4750-004",
+    "modelYear": 2019,
+    "familyCode": "DEMO-DJ",
+    "failedPart": "DEMO-PART-D",
+    "otherParts": "DEMO-PART-A",
+    "quantity": 2,
+    "causalLop": "DEMO-LOP-02",
+    "market": "U",
+    "repairDate": "2026-01-04",
+    "adjustedPartExpense": 261.75,
+    "adjustedLopExpense": 146.3
+  },
+  {
+    "id": "CLM-4750-005",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-B",
+    "displayVin": "DEMO-VIN-4750-005",
+    "claimNumber": "STLA-DEMO-4750-005",
+    "modelYear": 2019,
+    "familyCode": "DEMO-D2",
+    "failedPart": "DEMO-PART-A",
+    "otherParts": "DEMO-PART-B",
+    "quantity": 3,
+    "causalLop": "DEMO-LOP-03",
+    "market": "C",
+    "repairDate": "2026-02-05",
+    "adjustedPartExpense": 299.0,
+    "adjustedLopExpense": 168.4
+  },
+  {
+    "id": "CLM-4750-006",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-B",
+    "displayVin": "DEMO-VIN-4750-006",
+    "claimNumber": "STLA-DEMO-4750-006",
+    "modelYear": 2019,
+    "familyCode": "DEMO-DS",
+    "failedPart": "DEMO-PART-B",
+    "otherParts": "DEMO-PART-C",
+    "quantity": 4,
+    "causalLop": "DEMO-LOP-01",
+    "market": "U",
+    "repairDate": "2026-03-06",
+    "adjustedPartExpense": 336.25,
+    "adjustedLopExpense": 190.5
+  },
+  {
+    "id": "CLM-4750-007",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-C",
+    "displayVin": "DEMO-VIN-4750-007",
+    "claimNumber": "STLA-DEMO-4750-007",
+    "modelYear": 2019,
+    "familyCode": "DEMO-D2",
+    "failedPart": "DEMO-PART-C",
+    "otherParts": "DEMO-PART-D",
+    "quantity": 3,
+    "causalLop": "DEMO-LOP-03",
+    "market": "C",
+    "repairDate": "2026-04-07",
+    "adjustedPartExpense": 373.5,
+    "adjustedLopExpense": 212.6
+  },
+  {
+    "id": "CLM-4750-008",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-C",
+    "displayVin": "DEMO-VIN-4750-008",
+    "claimNumber": "STLA-DEMO-4750-008",
+    "modelYear": 2019,
+    "familyCode": "DEMO-DS",
+    "failedPart": "DEMO-PART-D",
+    "otherParts": "DEMO-PART-A",
+    "quantity": 4,
+    "causalLop": "DEMO-LOP-01",
+    "market": "U",
+    "repairDate": "2026-05-08",
+    "adjustedPartExpense": 410.75,
+    "adjustedLopExpense": 234.7
+  },
+  {
+    "id": "CLM-4750-009",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-C",
+    "displayVin": "DEMO-VIN-4750-009",
+    "claimNumber": "STLA-DEMO-4750-009",
+    "modelYear": 2019,
+    "familyCode": "DEMO-DJ",
+    "failedPart": "DEMO-PART-A",
+    "otherParts": "DEMO-PART-B",
+    "quantity": 5,
+    "causalLop": "DEMO-LOP-02",
+    "market": "C",
+    "repairDate": "2026-06-09",
+    "adjustedPartExpense": 448.0,
+    "adjustedLopExpense": 256.8
+  }
+];
+
+const STLA_RECOVERY_LINES = [
+  {
+    "id": "REC-DEMO-4551-C-A",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-A",
+    "market": "C",
+    "debitId": "DEMO-DB-4551-C-A",
+    "lop": "DEMO-LOP-01",
+    "numberOfConditions": 1,
+    "adjustedLaborExpense": 196.61,
+    "adjustedPartExpense": 365.14,
+    "supplierResponsibilityPct": 50
+  },
+  {
+    "id": "REC-DEMO-4551-U-A",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-A",
+    "market": "U",
+    "debitId": "DEMO-DB-4551-U-A",
+    "lop": "DEMO-LOP-02",
+    "numberOfConditions": 2,
+    "adjustedLaborExpense": 107.2,
+    "adjustedPartExpense": 199.1,
+    "supplierResponsibilityPct": 75
+  },
+  {
+    "id": "REC-DEMO-4551-C-B",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-B",
+    "market": "C",
+    "debitId": "DEMO-DB-4551-C-B",
+    "lop": "DEMO-LOP-03",
+    "numberOfConditions": 3,
+    "adjustedLaborExpense": 313.95,
+    "adjustedPartExpense": 583.05,
+    "supplierResponsibilityPct": 100
+  },
+  {
+    "id": "REC-DEMO-4551-U-B",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-B",
+    "market": "U",
+    "debitId": "DEMO-DB-4551-U-B",
+    "lop": "DEMO-LOP-01",
+    "numberOfConditions": 4,
+    "adjustedLaborExpense": 176.82,
+    "adjustedPartExpense": 328.38,
+    "supplierResponsibilityPct": 50
+  },
+  {
+    "id": "REC-DEMO-4551-C-C",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-C",
+    "market": "C",
+    "debitId": "DEMO-DB-4551-C-C",
+    "lop": "DEMO-LOP-02",
+    "numberOfConditions": 1,
+    "adjustedLaborExpense": 431.29,
+    "adjustedPartExpense": 800.96,
+    "supplierResponsibilityPct": 75
+  },
+  {
+    "id": "REC-DEMO-4551-U-C",
+    "campaignNumber": "4551",
+    "swrsId": "SWRS-DEMO-4551-C",
+    "market": "U",
+    "debitId": "DEMO-DB-4551-U-C",
+    "lop": "DEMO-LOP-03",
+    "numberOfConditions": 2,
+    "adjustedLaborExpense": 246.44,
+    "adjustedPartExpense": 457.67,
+    "supplierResponsibilityPct": 100
+  },
+  {
+    "id": "REC-DEMO-4750-C-A",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-A",
+    "market": "C",
+    "debitId": "DEMO-DB-4750-C-A",
+    "lop": "DEMO-LOP-01",
+    "numberOfConditions": 3,
+    "adjustedLaborExpense": 201.86,
+    "adjustedPartExpense": 374.89,
+    "supplierResponsibilityPct": 50
+  },
+  {
+    "id": "REC-DEMO-4750-U-A",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-A",
+    "market": "U",
+    "debitId": "DEMO-DB-4750-U-A",
+    "lop": "DEMO-LOP-02",
+    "numberOfConditions": 4,
+    "adjustedLaborExpense": 112.45,
+    "adjustedPartExpense": 208.85,
+    "supplierResponsibilityPct": 75
+  },
+  {
+    "id": "REC-DEMO-4750-C-B",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-B",
+    "market": "C",
+    "debitId": "DEMO-DB-4750-C-B",
+    "lop": "DEMO-LOP-03",
+    "numberOfConditions": 1,
+    "adjustedLaborExpense": 319.2,
+    "adjustedPartExpense": 592.8,
+    "supplierResponsibilityPct": 100
+  },
+  {
+    "id": "REC-DEMO-4750-U-B",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-B",
+    "market": "U",
+    "debitId": "DEMO-DB-4750-U-B",
+    "lop": "DEMO-LOP-01",
+    "numberOfConditions": 2,
+    "adjustedLaborExpense": 182.07,
+    "adjustedPartExpense": 338.13,
+    "supplierResponsibilityPct": 50
+  },
+  {
+    "id": "REC-DEMO-4750-C-C",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-C",
+    "market": "C",
+    "debitId": "DEMO-DB-4750-C-C",
+    "lop": "DEMO-LOP-02",
+    "numberOfConditions": 3,
+    "adjustedLaborExpense": 436.54,
+    "adjustedPartExpense": 810.71,
+    "supplierResponsibilityPct": 75
+  },
+  {
+    "id": "REC-DEMO-4750-U-C",
+    "campaignNumber": "4750",
+    "swrsId": "SWRS-DEMO-4750-C",
+    "market": "U",
+    "debitId": "DEMO-DB-4750-U-C",
+    "lop": "DEMO-LOP-03",
+    "numberOfConditions": 4,
+    "adjustedLaborExpense": 251.69,
+    "adjustedPartExpense": 467.42,
+    "supplierResponsibilityPct": 100
+  }
+];
+
+// ═════════════════════════════════════════════════════════════════
+// STELLANTIS WORKSPACE — Increment (Phase B5 demo)
+// Synthetic fixture data only. Read-only, non-persistent, no API calls.
+// Terminology: "Campaign" (not "Case") per Stellantis SWRS convention.
+// ═════════════════════════════════════════════════════════════════
+
+function stlaCurrency(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return '\u2014';
+  }
+  return Number(value).toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function stlaClaimTotal(claim) {
+  return Number(claim.adjustedPartExpense || 0)
+    + Number(claim.adjustedLopExpense || 0);
+}
+
+function stlaRecoveryTotal(line) {
+  return Number(line.adjustedLaborExpense || 0)
+    + Number(line.adjustedPartExpense || 0);
+}
+
+function stlaSupplierResponsibility(line) {
+  return stlaRecoveryTotal(line)
+    * Number(line.supplierResponsibilityPct || 0)
+    / 100;
+}
+
+const STLA_STATUS_COLORS = {
+  'Reconciled':'#3F8F5B','Review Required':'#C08A2E','Pending Allocation':'#7C7669',
+  'Recovery Review':'#1B6FB8','Allocation Review':'#C08A2E',
+};
+const StlaPill = ({label}) => {
+  const c = STLA_STATUS_COLORS[label] || '#7C7669';
+  return <span style={{display:'inline-flex',alignItems:'center',gap:5,height:20,padding:'0 8px',borderRadius:6,fontSize:11,fontWeight:500,background:c+'1F',color:c,lineHeight:1}}>
+    <span style={{width:6,height:6,borderRadius:'50%',background:c}}/>{label}
+  </span>;
+};
+
+function StlaKPI({label,value,hint}) {
+  return (
+    <div style={{background:'#fff',border:'1px solid #E7E4DC',borderRadius:8,padding:'12px 14px',display:'flex',flexDirection:'column',gap:4}}>
+      <div style={{fontSize:11,color:'#7C7669',fontWeight:500,textTransform:'uppercase',letterSpacing:'0.02em'}}>{label}</div>
+      <div style={{fontSize:20,fontWeight:600,color:'#1B2A44',fontVariantNumeric:'tabular-nums'}}>{value}</div>
+      {hint && <div style={{fontSize:11,color:'#7C7669'}}>{hint}</div>}
+    </div>
+  );
+}
+
+const STLA_SYNTHETIC_NOTICE = 'Synthetic demonstration data only \u2014 no original VIN, claim, dealer, supplier, or financial records are included.';
+
+function StlaNotice() {
+  return (
+    <div style={{background:'#FBF4E9',border:'1px solid #E9D9B6',borderRadius:8,padding:'8px 12px',fontSize:12,color:'#7C5A22',marginBottom:12}}>
+      {STLA_SYNTHETIC_NOTICE}
+    </div>
+  );
+}
+
+function StlaEmpty({message}) {
+  return <div style={{padding:'24px 12px',textAlign:'center',color:'#7C7669',fontSize:13}}>{message}</div>;
+}
+
+const STLA_TH = {textAlign:'left',fontSize:11,fontWeight:600,color:'#7C7669',textTransform:'uppercase',letterSpacing:'0.02em',padding:'8px 10px',borderBottom:'1px solid #E7E4DC',whiteSpace:'nowrap'};
+const STLA_TD = {fontSize:12,color:'#1B2A44',padding:'8px 10px',borderBottom:'1px solid #F1EFE8',whiteSpace:'nowrap'};
+
+function StellantisWorkspace(){
+  const [tab, setTab] = React.useState('dashboard');
+  const [campaignFilter, setCampaignFilter] = React.useState('ALL');
+  const [search, setSearch] = React.useState('');
+  const [marketFilter, setMarketFilter] = React.useState('ALL');
+  const [detailCampaign, setDetailCampaign] = React.useState(null);
+
+  const clearFilters = () => {
+    setCampaignFilter('ALL');
+    setSearch('');
+    setMarketFilter('ALL');
+  };
+
+  const q = search.trim().toLowerCase();
+
+  const campaigns = React.useMemo(() => STLA_CAMPAIGNS.filter(c =>
+    (campaignFilter==='ALL' || c.campaignNumber===campaignFilter)
+  ), [campaignFilter]);
+
+  const swrsGroups = React.useMemo(() => STLA_SWRS_GROUPS.filter(g =>
+    (campaignFilter==='ALL' || g.campaignNumber===campaignFilter) &&
+    (!q || g.campaignNumber.toLowerCase().includes(q) || g.id.toLowerCase().includes(q) || g.reviewStatus.toLowerCase().includes(q))
+  ), [campaignFilter, q]);
+
+  const debits = React.useMemo(() => STLA_DEBITS.filter(d =>
+    (campaignFilter==='ALL' || d.campaignNumber===campaignFilter) &&
+    (marketFilter==='ALL' || d.market===marketFilter) &&
+    (!q || d.campaignNumber.toLowerCase().includes(q) || d.id.toLowerCase().includes(q) || d.swrsId.toLowerCase().includes(q) || d.market.toLowerCase().includes(q) || d.reviewStatus.toLowerCase().includes(q))
+  ), [campaignFilter, marketFilter, q]);
+
+  const claims = React.useMemo(() => STLA_CLAIMS.filter(c =>
+    (campaignFilter==='ALL' || c.campaignNumber===campaignFilter) &&
+    (marketFilter==='ALL' || c.market===marketFilter) &&
+    (!q || [c.campaignNumber,c.swrsId,c.displayVin,c.claimNumber,c.familyCode,c.failedPart,c.causalLop].some(v=>String(v).toLowerCase().includes(q)))
+  ), [campaignFilter, marketFilter, q]);
+
+  const recoveryLines = React.useMemo(() => STLA_RECOVERY_LINES.filter(r =>
+    (campaignFilter==='ALL' || r.campaignNumber===campaignFilter) &&
+    (marketFilter==='ALL' || r.market===marketFilter) &&
+    (!q || [r.campaignNumber,r.swrsId,r.debitId,r.lop].some(v=>String(v).toLowerCase().includes(q)))
+  ), [campaignFilter, marketFilter, q]);
+
+  // Dashboard derived values (campaign-filtered, both markets shown for comparison)
+  const dashDebits = React.useMemo(() => STLA_DEBITS.filter(d => campaignFilter==='ALL' || d.campaignNumber===campaignFilter), [campaignFilter]);
+  const dashRecovery = React.useMemo(() => STLA_RECOVERY_LINES.filter(r => campaignFilter==='ALL' || r.campaignNumber===campaignFilter), [campaignFilter]);
+
+  const kpiCampaignCount = campaigns.length;
+  const kpiSwrsCount = swrsGroups.length;
+  const kpiClaimCount = claims.length;
+  const kpiUniqueVins = new Set(claims.map(c=>c.displayVin)).size;
+  const kpiDebitCount = dashDebits.length;
+  const kpiDebitTotal = dashDebits.reduce((s,d)=>s+Number(d.billableAmount||0),0);
+  const kpiClaimTotal = claims.reduce((s,c)=>s+stlaClaimTotal(c),0);
+  const kpiSupplierResp = dashRecovery.reduce((s,r)=>s+stlaSupplierResponsibility(r),0);
+
+  const marketCTotal = dashDebits.filter(d=>d.market==='C').reduce((s,d)=>s+Number(d.billableAmount||0),0);
+  const marketUTotal = dashDebits.filter(d=>d.market==='U').reduce((s,d)=>s+Number(d.billableAmount||0),0);
+
+  const swrsStatusDist = React.useMemo(() => {
+    const dist = {};
+    STLA_SWRS_GROUPS.filter(g => campaignFilter==='ALL' || g.campaignNumber===campaignFilter).forEach(g => {
+      dist[g.reviewStatus] = (dist[g.reviewStatus]||0)+1;
+    });
+    return dist;
+  }, [campaignFilter]);
+
+  const recoveryByCampaign = React.useMemo(() => {
+    const map = {};
+    ['4551','4750'].forEach(cn => {
+      if (campaignFilter!=='ALL' && campaignFilter!==cn) return;
+      const lines = STLA_RECOVERY_LINES.filter(r=>r.campaignNumber===cn);
+      map[cn] = lines.reduce((s,r)=>s+stlaSupplierResponsibility(r),0);
+    });
+    return map;
+  }, [campaignFilter]);
+
+  const swrsMap = React.useMemo(() => {
+    const m = {};
+    STLA_SWRS_GROUPS.forEach(g => { m[g.id] = g; });
+    return m;
+  }, []);
+
+  const TabBtn = ({id,label}) => (
+    <button onClick={()=>setTab(id)} style={{
+      padding:'8px 14px',fontSize:12,fontWeight:600,borderRadius:6,border:'1px solid '+(tab===id?'#C0574E':'#E7E4DC'),
+      background:tab===id?'#C0574E':'#fff',color:tab===id?'#fff':'#1B2A44',cursor:'pointer'
+    }}>{label}</button>
+  );
+
+  return (
+    <div style={{padding:20,display:'flex',flexDirection:'column',gap:16}}>
+      <div>
+        <div style={{fontSize:18,fontWeight:700,color:'#1B2A44'}}>Stellantis Workspace</div>
+        <div style={{fontSize:12,color:'#7C7669'}}>Read-only beta prototype for Campaign recovery analysis using synthetic demonstration fixtures.</div>
+      </div>
+
+      <StlaNotice/>
+
+      <div style={{display:'flex',flexWrap:'wrap',gap:10,alignItems:'center'}}>
+        <select value={campaignFilter} onChange={e=>setCampaignFilter(e.target.value)} style={{padding:'6px 10px',fontSize:12,borderRadius:6,border:'1px solid #E7E4DC'}}>
+          <option value="ALL">All Campaigns</option>
+          <option value="4551">Campaign 4551</option>
+          <option value="4750">Campaign 4750</option>
+        </select>
+        <select value={marketFilter} onChange={e=>setMarketFilter(e.target.value)} style={{padding:'6px 10px',fontSize:12,borderRadius:6,border:'1px solid #E7E4DC'}}>
+          <option value="ALL">All Markets</option>
+          <option value="C">Market C</option>
+          <option value="U">Market U</option>
+        </select>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{padding:'6px 10px',fontSize:12,borderRadius:6,border:'1px solid #E7E4DC',minWidth:200}}/>
+        <button onClick={clearFilters} style={{padding:'6px 12px',fontSize:12,borderRadius:6,border:'1px solid #E7E4DC',background:'#fff',cursor:'pointer'}}>Clear Filters</button>
+      </div>
+
+      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+        <TabBtn id="dashboard" label="Campaign Dashboard"/>
+        <TabBtn id="registry" label="Campaign Registry"/>
+        <TabBtn id="swrs" label="SWRS Groups"/>
+        <TabBtn id="debits" label="Debit Registry"/>
+        <TabBtn id="claims" label="Claim Explorer"/>
+        <TabBtn id="recovery" label="Cost Recovery"/>
+      </div>
+
+      {tab==='dashboard' && (
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10}}>
+            <StlaKPI label="Campaigns" value={kpiCampaignCount}/>
+            <StlaKPI label="SWRS Groups" value={kpiSwrsCount}/>
+            <StlaKPI label="Claims" value={kpiClaimCount}/>
+            <StlaKPI label="Unique Demo VINs" value={kpiUniqueVins}/>
+            <StlaKPI label="Debit Records" value={kpiDebitCount}/>
+            <StlaKPI label="Total Debit Amount" value={stlaCurrency(kpiDebitTotal)}/>
+            <StlaKPI label="Adjusted Claim Total" value={stlaCurrency(kpiClaimTotal)}/>
+            <StlaKPI label="Supplier Responsibility" value={stlaCurrency(kpiSupplierResp)}/>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:16}}>
+            <div style={{background:'#fff',border:'1px solid #E7E4DC',borderRadius:8,padding:14}}>
+              <div style={{fontSize:12,fontWeight:600,color:'#1B2A44',marginBottom:8,textTransform:'uppercase'}}>Recovery by Campaign</div>
+              {Object.keys(recoveryByCampaign).length===0 ? <StlaEmpty message="No synthetic Campaigns match the current filters."/> :
+                Object.entries(recoveryByCampaign).map(([cn,val]) => (
+                  <div key={cn} style={{display:'flex',justifyContent:'space-between',fontSize:12,padding:'4px 0'}}>
+                    <span>Campaign {cn}</span><span style={{fontVariantNumeric:'tabular-nums'}}>{stlaCurrency(val)}</span>
+                  </div>
+                ))}
+            </div>
+            <div style={{background:'#fff',border:'1px solid #E7E4DC',borderRadius:8,padding:14}}>
+              <div style={{fontSize:12,fontWeight:600,color:'#1B2A44',marginBottom:8,textTransform:'uppercase'}}>Market C vs Market U Debit Totals</div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,padding:'4px 0'}}><span>Market C</span><span style={{fontVariantNumeric:'tabular-nums'}}>{stlaCurrency(marketCTotal)}</span></div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,padding:'4px 0'}}><span>Market U</span><span style={{fontVariantNumeric:'tabular-nums'}}>{stlaCurrency(marketUTotal)}</span></div>
+            </div>
+            <div style={{background:'#fff',border:'1px solid #E7E4DC',borderRadius:8,padding:14}}>
+              <div style={{fontSize:12,fontWeight:600,color:'#1B2A44',marginBottom:8,textTransform:'uppercase'}}>SWRS Review Status Distribution</div>
+              {Object.keys(swrsStatusDist).length===0 ? <StlaEmpty message="No synthetic SWRS groups match the current filters."/> :
+                Object.entries(swrsStatusDist).map(([s,c]) => (
+                  <div key={s} style={{display:'flex',justifyContent:'space-between',fontSize:12,padding:'4px 0'}}><StlaPill label={s}/><span>{c}</span></div>
+                ))}
+            </div>
+          </div>
+          <div style={{fontSize:11,color:'#7C7669'}}>All calculations use synthetic demonstration fixtures.</div>
+        </div>
+      )}
+
+      {tab==='registry' && (
+        <div style={{background:'#fff',border:'1px solid #E7E4DC',borderRadius:8,overflowX:'auto'}}>
+          {campaigns.length===0 ? <StlaEmpty message="No synthetic Campaigns match the current filters."/> : (
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr>
+              <th style={STLA_TH}>Campaign Number</th><th style={STLA_TH}>Customer</th><th style={STLA_TH}>Plant</th>
+              <th style={STLA_TH}>Model Year</th><th style={STLA_TH}>Claim Classification</th><th style={STLA_TH}>Billing Cycle</th>
+              <th style={STLA_TH}>SWRS Groups</th><th style={STLA_TH}>Debit Records</th><th style={STLA_TH}>Synthetic Claims</th>
+              <th style={STLA_TH}>Debit Total</th><th style={STLA_TH}>Status</th>
+            </tr></thead>
+            <tbody>
+              {campaigns.map(c => {
+                const cSwrs = STLA_SWRS_GROUPS.filter(g=>g.campaignNumber===c.campaignNumber);
+                const cDebits = STLA_DEBITS.filter(d=>d.campaignNumber===c.campaignNumber);
+                const cClaims = STLA_CLAIMS.filter(cl=>cl.campaignNumber===c.campaignNumber);
+                const debitTotal = cDebits.reduce((s,d)=>s+Number(d.billableAmount||0),0);
+                return (
+                  <tr key={c.campaignNumber} onClick={()=>setDetailCampaign(c.campaignNumber)} style={{cursor:'pointer'}}>
+                    <td style={STLA_TD}>Campaign {c.campaignNumber}</td>
+                    <td style={STLA_TD}>{c.customer}</td>
+                    <td style={STLA_TD}>{c.plant}</td>
+                    <td style={STLA_TD}>{c.modelYear}</td>
+                    <td style={STLA_TD}>{c.claimClassification}</td>
+                    <td style={STLA_TD}>{c.billingCycle}</td>
+                    <td style={STLA_TD}>{cSwrs.length}</td>
+                    <td style={STLA_TD}>{cDebits.length}</td>
+                    <td style={STLA_TD}>{cClaims.length}</td>
+                    <td style={STLA_TD}>{stlaCurrency(debitTotal)}</td>
+                    <td style={STLA_TD}><StlaPill label={c.status}/></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          )}
+          {detailCampaign && (() => {
+            const c = STLA_CAMPAIGNS.find(x=>x.campaignNumber===detailCampaign);
+            const cSwrs = STLA_SWRS_GROUPS.filter(g=>g.campaignNumber===detailCampaign);
+            const cDebits = STLA_DEBITS.filter(d=>d.campaignNumber===detailCampaign);
+            const cClaims = STLA_CLAIMS.filter(cl=>cl.campaignNumber===detailCampaign);
+            const debitTotal = cDebits.reduce((s,d)=>s+Number(d.billableAmount||0),0);
+            const claimTotal = cClaims.reduce((s,cl)=>s+stlaClaimTotal(cl),0);
+            return (
+              <div style={{padding:14,borderTop:'1px solid #E7E4DC',fontSize:12}}>
+                <div style={{fontWeight:600,marginBottom:6}}>Campaign {c.campaignNumber} Detail</div>
+                <div>SWRS Groups: {cSwrs.length}</div>
+                <div>Debit Records: {cDebits.length}</div>
+                <div>Claims: {cClaims.length}</div>
+                <div>Debit Total: {stlaCurrency(debitTotal)}</div>
+                <div>Adjusted Claim Total: {stlaCurrency(claimTotal)}</div>
+                <div>Status: <StlaPill label={c.status}/></div>
+                <div style={{marginTop:6,color:'#7C7669'}}>{STLA_SYNTHETIC_NOTICE}</div>
+                <button onClick={()=>setDetailCampaign(null)} style={{marginTop:8,padding:'4px 10px',fontSize:11,borderRadius:6,border:'1px solid #E7E4DC',background:'#fff',cursor:'pointer'}}>Close</button>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {tab==='swrs' && (
+        <div style={{background:'#fff',border:'1px solid #E7E4DC',borderRadius:8,overflowX:'auto'}}>
+          {swrsGroups.length===0 ? <StlaEmpty message="No synthetic SWRS groups match the current filters."/> : (
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr>
+              <th style={STLA_TH}>Campaign</th><th style={STLA_TH}>SWRS Identifier</th><th style={STLA_TH}>Synthetic Claim Count</th>
+              <th style={STLA_TH}>Market C Debit Amount</th><th style={STLA_TH}>Market U Debit Amount</th><th style={STLA_TH}>Total Debit Amount</th>
+              <th style={STLA_TH}>Related Debit Count</th><th style={STLA_TH}>Review Status</th>
+            </tr></thead>
+            <tbody>
+              {swrsGroups.map(g => {
+                const gDebits = STLA_DEBITS.filter(d=>d.swrsId===g.id);
+                const cAmt = gDebits.filter(d=>d.market==='C').reduce((s,d)=>s+Number(d.billableAmount||0),0);
+                const uAmt = gDebits.filter(d=>d.market==='U').reduce((s,d)=>s+Number(d.billableAmount||0),0);
+                const gClaims = STLA_CLAIMS.filter(cl=>cl.swrsId===g.id);
+                return (
+                  <tr key={g.id}>
+                    <td style={STLA_TD}>Campaign {g.campaignNumber}</td>
+                    <td style={STLA_TD}>{g.id}</td>
+                    <td style={STLA_TD}>{gClaims.length}</td>
+                    <td style={STLA_TD}>{stlaCurrency(cAmt)}</td>
+                    <td style={STLA_TD}>{stlaCurrency(uAmt)}</td>
+                    <td style={STLA_TD}>{stlaCurrency(cAmt+uAmt)}</td>
+                    <td style={STLA_TD}>{gDebits.length}</td>
+                    <td style={STLA_TD}><StlaPill label={g.reviewStatus}/></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          )}
+        </div>
+      )}
+
+      {tab==='debits' && (
+        <div style={{background:'#fff',border:'1px solid #E7E4DC',borderRadius:8,overflowX:'auto'}}>
+          {debits.length===0 ? <StlaEmpty message="No synthetic debit records match the current filters."/> : (
+          <>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr>
+              <th style={STLA_TH}>Campaign</th><th style={STLA_TH}>Debit Identifier</th><th style={STLA_TH}>SWRS Identifier</th>
+              <th style={STLA_TH}>Market</th><th style={STLA_TH}>Billing Cycle</th><th style={STLA_TH}>Currency</th>
+              <th style={STLA_TH}>Billable Amount</th><th style={STLA_TH}>Review Status</th>
+            </tr></thead>
+            <tbody>
+              {debits.map(d => (
+                <tr key={d.id}>
+                  <td style={STLA_TD}>Campaign {d.campaignNumber}</td>
+                  <td style={STLA_TD}>{d.id}</td>
+                  <td style={STLA_TD}>{d.swrsId}</td>
+                  <td style={STLA_TD}>{d.market}</td>
+                  <td style={STLA_TD}>{d.billingCycle}</td>
+                  <td style={STLA_TD}>{d.currency}</td>
+                  <td style={STLA_TD}>{stlaCurrency(d.billableAmount)}</td>
+                  <td style={STLA_TD}><StlaPill label={d.reviewStatus}/></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{padding:'8px 10px',fontSize:11,color:'#7C7669',borderTop:'1px solid #E7E4DC'}}>
+            Visible: {debits.length} debit records \u2014 {stlaCurrency(debits.reduce((s,d)=>s+Number(d.billableAmount||0),0))}
+          </div>
+          </>
+          )}
+        </div>
+      )}
+
+      {tab==='claims' && (
+        <div style={{background:'#fff',border:'1px solid #E7E4DC',borderRadius:8,overflowX:'auto'}}>
+          {claims.length===0 ? <StlaEmpty message="No synthetic claims match the current filters."/> : (
+          <>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr>
+              <th style={STLA_TH}>Campaign</th><th style={STLA_TH}>SWRS</th><th style={STLA_TH}>Demo VIN</th>
+              <th style={STLA_TH}>Synthetic Claim Number</th><th style={STLA_TH}>Model Year</th><th style={STLA_TH}>Family Code</th>
+              <th style={STLA_TH}>Failed Part</th><th style={STLA_TH}>Other Parts</th><th style={STLA_TH}>Quantity</th>
+              <th style={STLA_TH}>Causal LOP</th><th style={STLA_TH}>Market</th><th style={STLA_TH}>Repair Date</th>
+              <th style={STLA_TH}>Adjusted Part Expense</th><th style={STLA_TH}>Adjusted LOP Expense</th><th style={STLA_TH}>Adjusted Total</th>
+            </tr></thead>
+            <tbody>
+              {claims.map(c => (
+                <tr key={c.id}>
+                  <td style={STLA_TD}>Campaign {c.campaignNumber}</td>
+                  <td style={STLA_TD}>{c.swrsId}</td>
+                  <td style={STLA_TD}>{c.displayVin}</td>
+                  <td style={STLA_TD}>{c.claimNumber}</td>
+                  <td style={STLA_TD}>{c.modelYear}</td>
+                  <td style={STLA_TD}>{c.familyCode}</td>
+                  <td style={STLA_TD}>{c.failedPart}</td>
+                  <td style={STLA_TD}>{c.otherParts}</td>
+                  <td style={STLA_TD}>{c.quantity}</td>
+                  <td style={STLA_TD}>{c.causalLop}</td>
+                  <td style={STLA_TD}>{c.market}</td>
+                  <td style={STLA_TD}>{c.repairDate}</td>
+                  <td style={STLA_TD}>{stlaCurrency(c.adjustedPartExpense)}</td>
+                  <td style={STLA_TD}>{stlaCurrency(c.adjustedLopExpense)}</td>
+                  <td style={STLA_TD}>{stlaCurrency(stlaClaimTotal(c))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{padding:'8px 10px',fontSize:11,color:'#7C7669',borderTop:'1px solid #E7E4DC'}}>
+            Visible: {claims.length} claims \u2014 {stlaCurrency(claims.reduce((s,c)=>s+stlaClaimTotal(c),0))} \u2014 {new Set(claims.map(c=>c.displayVin)).size} distinct Demo VINs
+          </div>
+          </>
+          )}
+        </div>
+      )}
+
+      {tab==='recovery' && (
+        <div style={{background:'#fff',border:'1px solid #E7E4DC',borderRadius:8,overflowX:'auto'}}>
+          {recoveryLines.length===0 ? <StlaEmpty message="No synthetic recovery lines match the current filters."/> : (
+          <>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr>
+              <th style={STLA_TH}>Campaign</th><th style={STLA_TH}>SWRS</th><th style={STLA_TH}>Market</th><th style={STLA_TH}>Debit Identifier</th>
+              <th style={STLA_TH}>LOP</th><th style={STLA_TH}>Number of Conditions</th><th style={STLA_TH}>Adjusted Labor Expense</th>
+              <th style={STLA_TH}>Adjusted Part Expense</th><th style={STLA_TH}>Adjusted Total Expense</th>
+              <th style={STLA_TH}>Supplier Responsibility %</th><th style={STLA_TH}>Supplier Responsibility Expense</th>
+            </tr></thead>
+            <tbody>
+              {recoveryLines.map(r => (
+                <tr key={r.id}>
+                  <td style={STLA_TD}>Campaign {r.campaignNumber}</td>
+                  <td style={STLA_TD}>{r.swrsId}</td>
+                  <td style={STLA_TD}>{r.market}</td>
+                  <td style={STLA_TD}>{r.debitId}</td>
+                  <td style={STLA_TD}>{r.lop}</td>
+                  <td style={STLA_TD}>{r.numberOfConditions}</td>
+                  <td style={STLA_TD}>{stlaCurrency(r.adjustedLaborExpense)}</td>
+                  <td style={STLA_TD}>{stlaCurrency(r.adjustedPartExpense)}</td>
+                  <td style={STLA_TD}>{stlaCurrency(stlaRecoveryTotal(r))}</td>
+                  <td style={STLA_TD}>{r.supplierResponsibilityPct}%</td>
+                  <td style={STLA_TD}>{stlaCurrency(stlaSupplierResponsibility(r))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{padding:'8px 10px',fontSize:11,color:'#7C7669',borderTop:'1px solid #E7E4DC'}}>
+            Visible conditions: {recoveryLines.reduce((s,r)=>s+Number(r.numberOfConditions||0),0)} \u2014 Adjusted Total: {stlaCurrency(recoveryLines.reduce((s,r)=>s+stlaRecoveryTotal(r),0))} \u2014 Supplier Responsibility: {stlaCurrency(recoveryLines.reduce((s,r)=>s+stlaSupplierResponsibility(r),0))}
+          </div>
+          </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
 function WarrantyMISApp({areaSwitch,wmisTab,setWmisTab}){
   const [wmisOem,   setWmisOem]   = useState('ALL');
   const [wmisSearch,setWmisSearch]= useState('');
@@ -3203,7 +4289,7 @@ function WarrantyMISApp({areaSwitch,wmisTab,setWmisTab}){
           {wmisTab==='wmis-overview'            && <WMIS_Placeholder id="wmis-overview"/>}
           {wmisTab==='wmis-recall-intelligence' && <RecallIntelligence/>}
           {wmisTab==='wmis-gm'                  && <GMWorkspace/>}
-          {wmisTab==='wmis-stellantis'          && <WMIS_Placeholder id="wmis-stellantis"/>}
+          {wmisTab==='wmis-stellantis'          && <StellantisWorkspace/>}
           {wmisTab==='wmis-parts'               && <WMIS_Placeholder id="wmis-parts"/>}
           {wmisTab==='wmis-operations'          && <WMIS_Placeholder id="wmis-operations"/>}
         </div>
