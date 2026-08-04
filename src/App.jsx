@@ -4226,6 +4226,588 @@ function StellantisWorkspace(){
 
 
 
+// ══════════════════════════════════════════════════════════════════════════
+// WARRANTY MIS — OPERATIONS / IMPORT CENTER (Phase 2)
+// LOCAL PREVIEW — NOT PERSISTED.
+// All parsing occurs in-browser using the existing `xlsx` dependency.
+// No network requests, no Supabase, no localStorage writes of file content.
+// All workbook-derived data lives only in React state for this component and
+// is discarded on reset / unmount.
+// ══════════════════════════════════════════════════════════════════════════
+
+const WMIS_IMPORT_CANONICAL_FIELDS = [
+  { key:'campaign_number',                    label:'Campaign Number',                    required:true  },
+  { key:'billing_cycle_code',                  label:'Billing Cycle Code',                  required:false },
+  { key:'source_claim_number',                 label:'Source Claim Number',                 required:true  },
+  { key:'vin',                                 label:'VIN',                                 required:false },
+  { key:'source_swrs_full_code',               label:'Source SWRS Full Code',               required:true  },
+  { key:'market_code',                         label:'Market Code',                         required:false },
+  { key:'source_debit_number',                 label:'Source Debit Number',                 required:false },
+  { key:'claim_paid_or_chargeback_date_raw',   label:'Claim Paid / Chargeback Date (raw)',  required:false },
+  { key:'adjusted_part_expense',               label:'Adjusted Part Expense',               required:false },
+  { key:'adjusted_lop_expense',                label:'Adjusted LOP Expense',                 required:false },
+  { key:'adjusted_total_expense',              label:'Adjusted Total Expense',               required:false },
+];
+
+const WMIS_IMPORT_NUMERIC_FIELDS = new Set([
+  'adjusted_part_expense','adjusted_lop_expense','adjusted_total_expense',
+]);
+
+const WMIS_IMPORT_ALIASES = {
+  campaign_number:                  ['campaign','campaign_number','campaign_no','campaign_num'],
+  billing_cycle_code:               ['billing_cycle','billing_cycle_code','cycle','cycle_code'],
+  source_claim_number:              ['claim','claim_number','claim_no','claim_num'],
+  vin:                               ['vin','vehicle_identification_number'],
+  source_swrs_full_code:             ['swrs','swrs_code','swrs_full_code','source_swrs_full_code'],
+  market_code:                       ['market','market_code'],
+  source_debit_number:               ['debit','debit_number','debit_no'],
+  claim_paid_or_chargeback_date_raw: ['claim_paid_date','chargeback_date','paid_or_chargeback_date','claim_paid_or_chargeback_date'],
+  adjusted_part_expense:             ['adjusted_part_expense','adjusted_parts','part_expense_adjusted'],
+  adjusted_lop_expense:              ['adjusted_lop_expense','adjusted_labor_expense','adjusted_lop','adjusted_labor'],
+  adjusted_total_expense:            ['adjusted_total_expense','adjusted_total','total_adjusted_expense'],
+};
+
+function wmisImpNormalizeHeader(h){
+  return String(h==null?'':h)
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\-\/.]+/g,'_')
+    .replace(/_+/g,'_')
+    .replace(/^_+|_+$/g,'');
+}
+
+function wmisImpAutoDetectMapping(headers){
+  const normalized = headers.map(h=>({ raw:h, norm:wmisImpNormalizeHeader(h) }));
+  const mapping = {};
+  const usedSourceCols = new Set();
+  const autoFlags = {};
+  for(const field of WMIS_IMPORT_CANONICAL_FIELDS){
+    const aliases = WMIS_IMPORT_ALIASES[field.key] || [];
+    let match = null;
+    for(const alias of aliases){
+      const found = normalized.find(n => n.norm === alias && !usedSourceCols.has(n.raw));
+      if(found){ match = found.raw; break; }
+    }
+    if(match){
+      mapping[field.key] = match;
+      usedSourceCols.add(match);
+      autoFlags[field.key] = true;
+    } else {
+      mapping[field.key] = '';
+      autoFlags[field.key] = false;
+    }
+  }
+  return { mapping, autoFlags };
+}
+
+function wmisImpParseNumeric(raw){
+  if(raw===undefined||raw===null||raw===''){ return { value:null, isMissing:true, isInvalid:false }; }
+  const str = String(raw).trim().replace(/,/g,'');
+  if(str===''){ return { value:null, isMissing:true, isInvalid:false }; }
+  const num = Number(str);
+  if(Number.isNaN(num)){ return { value:null, isMissing:false, isInvalid:true }; }
+  return { value: Math.round(num*100000)/100000, isMissing:false, isInvalid:false };
+}
+
+function wmisImpBuildPreviewRows(rawRows, mapping, limit){
+  const total = rawRows.length;
+  const rows = rawRows.slice(0, limit).map((raw, idx)=>{
+    const out = { __sourceRow: idx+2 };
+    for(const field of WMIS_IMPORT_CANONICAL_FIELDS){
+      const col = mapping[field.key];
+      const raw_v = col ? raw[col] : undefined;
+      if(field.key==='claim_paid_or_chargeback_date_raw'){
+        out[field.key] = { text: raw_v===undefined||raw_v===null ? '' : String(raw_v) };
+      } else if(WMIS_IMPORT_NUMERIC_FIELDS.has(field.key)){
+        out[field.key] = wmisImpParseNumeric(raw_v);
+      } else {
+        out[field.key] = { text: raw_v===undefined||raw_v===null ? '' : String(raw_v).trim() };
+      }
+    }
+    return out;
+  });
+  return { rows, total };
+}
+
+function wmisImpValidate(previewRows, totalRowCount, mapping, headers){
+  const findings = [];
+  const requiredKeys = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>f.required).map(f=>f.key);
+
+  for(const key of requiredKeys){
+    if(!mapping[key]){
+      findings.push({ severity:'ERROR', field:key, row:null, message:`Required canonical field "${key}" has no source-column mapping.` });
+    }
+  }
+
+  const normHeaders = headers.map(wmisImpNormalizeHeader);
+  const seen = new Set();
+  for(const nh of normHeaders){
+    if(seen.has(nh)){
+      findings.push({ severity:'ERROR', field:null, row:null, message:`Duplicate source header after normalization: "${nh}".` });
+    }
+    seen.add(nh);
+  }
+
+  if(totalRowCount===0){
+    findings.push({ severity:'ERROR', field:null, row:null, message:'Selected worksheet contains no data rows.' });
+  }
+
+  const dupeCombo = new Map();
+  previewRows.forEach(r=>{
+    for(const key of requiredKeys){
+      if(mapping[key] && r[key] && r[key].text===''){
+        findings.push({ severity:'ERROR', field:key, row:r.__sourceRow, message:`Required mapped field "${key}" is blank on this row.` });
+      }
+    }
+    for(const key of WMIS_IMPORT_NUMERIC_FIELDS){
+      if(mapping[key] && r[key] && r[key].isInvalid){
+        findings.push({ severity:'ERROR', field:key, row:r.__sourceRow, message:`Value in "${key}" cannot be parsed as numeric.` });
+      }
+    }
+    if(mapping.vin && r.vin && r.vin.text && r.vin.text.length!==17){
+      findings.push({ severity:'WARNING', field:'vin', row:r.__sourceRow, message:`VIN is present but is not 17 characters (found ${r.vin.text.length}).` });
+    }
+    const part = mapping.adjusted_part_expense && r.adjusted_part_expense ? r.adjusted_part_expense.value : null;
+    const lop  = mapping.adjusted_lop_expense  && r.adjusted_lop_expense  ? r.adjusted_lop_expense.value  : null;
+    const tot  = mapping.adjusted_total_expense && r.adjusted_total_expense ? r.adjusted_total_expense.value : null;
+    if(part!==null && lop!==null && tot!==null){
+      const expected = Math.round((part+lop)*100000)/100000;
+      if(Math.abs(expected-tot) > 0.00001){
+        findings.push({ severity:'WARNING', field:'adjusted_total_expense', row:r.__sourceRow, message:`Adjusted total (${tot}) does not equal adjusted part + adjusted LOP (${expected}) at five-decimal precision.` });
+      }
+    }
+    if(mapping.claim_paid_or_chargeback_date_raw && r.claim_paid_or_chargeback_date_raw){
+      findings.push({ severity:'INFO', field:'claim_paid_or_chargeback_date_raw', row:r.__sourceRow, message:'Source date value preserved as raw text — not parsed.' });
+    }
+    const comboKey = [
+      mapping.campaign_number && r.campaign_number ? r.campaign_number.text : '',
+      mapping.source_claim_number && r.source_claim_number ? r.source_claim_number.text : '',
+      mapping.source_swrs_full_code && r.source_swrs_full_code ? r.source_swrs_full_code.text : '',
+      mapping.market_code && r.market_code ? r.market_code.text : '',
+    ].join('||');
+    if(comboKey!=='||||'){
+      if(dupeCombo.has(comboKey)){
+        findings.push({ severity:'WARNING', field:null, row:r.__sourceRow, message:'Duplicate combination of Campaign, Claim, SWRS, and Market found in the preview.' });
+      }
+      dupeCombo.set(comboKey, true);
+    }
+  });
+
+  for(const field of WMIS_IMPORT_CANONICAL_FIELDS){
+    if(!field.required && !mapping[field.key]){
+      findings.push({ severity:'INFO', field:field.key, row:null, message:`Optional field "${field.key}" remained unmapped.` });
+    }
+  }
+  if(totalRowCount>previewRows.length){
+    findings.push({ severity:'WARNING', field:null, row:null, message:`Parsed preview exceeds ${previewRows.length} displayed rows (source has ${totalRowCount} rows).` });
+  }
+  findings.push({ severity:'INFO', field:null, row:null, message:'This preview is not persisted. All data remains in this browser session only.' });
+
+  const errorCount = findings.filter(f=>f.severity==='ERROR').length;
+  const warningCount = findings.filter(f=>f.severity==='WARNING').length;
+  const infoCount = findings.filter(f=>f.severity==='INFO').length;
+
+  const rowErrorSet = new Set(findings.filter(f=>f.severity==='ERROR' && f.row!=null).map(f=>f.row));
+  const invalidRowCount = rowErrorSet.size;
+  const validRowCount = Math.max(0, previewRows.length - invalidRowCount);
+
+  return { findings, errorCount, warningCount, infoCount, validRowCount, invalidRowCount };
+}
+
+function wmisImpMakeBatchId(){
+  return `LOCAL-PREVIEW-${Date.now()}`;
+}
+
+const WMIS_IMPORT_PREVIEW_ROW_LIMIT = 100;
+
+function WarrantyMISImportCenter(){
+  const [stage, setStage]         = React.useState('start'); // start | review | mapping | preview | validation | summary
+  const [drag, setDrag]           = React.useState(false);
+  const [fileName, setFileName]   = React.useState('');
+  const [fileSize, setFileSize]   = React.useState(null);
+  const [fileFormat, setFileFormat] = React.useState('');
+  const [error, setError]         = React.useState('');
+  const [workbook, setWorkbook]   = React.useState(null);
+  const [sheetNames, setSheetNames] = React.useState([]);
+  const [selectedSheet, setSelectedSheet] = React.useState('');
+  const [headers, setHeaders]     = React.useState([]);
+  const [rawRows, setRawRows]     = React.useState([]);
+  const [mapping, setMapping]     = React.useState({});
+  const [autoFlags, setAutoFlags] = React.useState({});
+  const fileInputRef = React.useRef(null);
+
+  const resetAll = ()=>{
+    setStage('start'); setDrag(false); setFileName(''); setFileSize(null); setFileFormat('');
+    setError(''); setWorkbook(null); setSheetNames([]); setSelectedSheet('');
+    setHeaders([]); setRawRows([]); setMapping({}); setAutoFlags({});
+    if(fileInputRef.current) fileInputRef.current.value='';
+  };
+
+  const loadSheet = (wb, sheetName)=>{
+    try{
+      const ws = wb.Sheets[sheetName];
+      if(!ws){ setError('Selected worksheet could not be read.'); return; }
+      const json = XLSX.utils.sheet_to_json(ws, { defval:'', raw:false });
+      if(!json.length){
+        setHeaders([]); setRawRows([]); setMapping({}); setAutoFlags({});
+        setSelectedSheet(sheetName);
+        setStage('review');
+        return;
+      }
+      const hdrs = Object.keys(json[0]);
+      const { mapping: mp, autoFlags: af } = wmisImpAutoDetectMapping(hdrs);
+      setHeaders(hdrs);
+      setRawRows(json);
+      setMapping(mp);
+      setAutoFlags(af);
+      setSelectedSheet(sheetName);
+      setStage('review');
+    }catch(e){
+      setError('The selected worksheet could not be parsed. Please verify the file is a valid workbook.');
+    }
+  };
+
+  const processFile = (file)=>{
+    setError('');
+    if(!file){ return; }
+    const nameLower = file.name.toLowerCase();
+    const isCsv = nameLower.endsWith('.csv');
+    const isXlsx = nameLower.endsWith('.xlsx') || nameLower.endsWith('.xls');
+    if(!isCsv && !isXlsx){
+      setError('Unsupported file type. Please select a .xlsx, .xls, or .csv file.');
+      return;
+    }
+    setFileName(file.name);
+    setFileSize(file.size);
+    setFileFormat(isCsv ? 'CSV' : (nameLower.endsWith('.xlsx') ? 'XLSX' : 'XLS'));
+
+    const reader = new FileReader();
+    reader.onerror = ()=>{ setError('The file could not be read by the browser. Please try again.'); };
+    reader.onload = (evt)=>{
+      try{
+        const data = evt.target.result;
+        const wb = XLSX.read(data, { type:'binary' });
+        if(!wb || !wb.SheetNames || wb.SheetNames.length===0){
+          setError('The workbook contains zero worksheets.');
+          return;
+        }
+        const names = isCsv ? ['CSV Import'] : wb.SheetNames;
+        setWorkbook(wb);
+        setSheetNames(names);
+        loadSheet(wb, names[0]);
+      }catch(e){
+        setError('The selected file could not be read as a workbook. Please verify the file is not corrupted.');
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const onFileInputChange = (e)=>{
+    const file = e.target.files && e.target.files[0];
+    if(file) processFile(file);
+  };
+  const onDrop = (e)=>{
+    e.preventDefault(); setDrag(false);
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if(file) processFile(file);
+  };
+
+  const setFieldMapping = (fieldKey, sourceCol)=>{
+    setMapping(prev=>({ ...prev, [fieldKey]: sourceCol }));
+    setAutoFlags(prev=>({ ...prev, [fieldKey]: false }));
+  };
+
+  const preview = React.useMemo(()=>{
+    if(!rawRows.length) return { rows:[], total:0 };
+    return wmisImpBuildPreviewRows(rawRows, mapping, WMIS_IMPORT_PREVIEW_ROW_LIMIT);
+  }, [rawRows, mapping]);
+
+  const validation = React.useMemo(()=>{
+    return wmisImpValidate(preview.rows, preview.total, mapping, headers);
+  }, [preview, mapping, headers]);
+
+  const mappedFieldCount = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>mapping[f.key]).length;
+  const requiredMapped = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>f.required).every(f=>mapping[f.key]);
+
+  const [batchId, setBatchId] = React.useState('');
+  const [generatedAt, setGeneratedAt] = React.useState('');
+  const goToSummary = ()=>{
+    setBatchId(wmisImpMakeBatchId());
+    setGeneratedAt(new Date().toISOString());
+    setStage('summary');
+  };
+
+  const sampleValueFor = (col)=>{
+    if(!col || !rawRows.length) return '—';
+    const v = rawRows[0][col];
+    if(v===undefined||v===null||v==='') return '—';
+    return String(v).slice(0,40);
+  };
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+      <PH title="Operations / Import Center" sub="Browser-local workbook preview for future connected import." />
+
+      <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
+        <Pill color="#B14C3C" soft={false}>LOCAL PREVIEW — NOT PERSISTED</Pill>
+        <span style={{fontSize:'12px',color:C.inkMute}}>
+          The selected file is processed in this browser session and is not uploaded.
+        </span>
+      </div>
+
+      {error ? (
+        <Card style={{padding:'14px 16px',borderColor:'#D9534F'}}>
+          <div style={{fontSize:'13px',color:'#B14C3C',fontWeight:600,marginBottom:'4px'}}>Import Center Notice</div>
+          <div style={{fontSize:'12.5px',color:C.inkMute}}>{error}</div>
+        </Card>
+      ) : null}
+
+      {stage==='start' && (
+        <Card style={{padding:'28px 24px'}}>
+          <div style={{fontSize:'12.5px',color:C.inkMute,marginBottom:'16px'}}>
+            No network request or database connection occurs on this screen. Workbook parsing happens
+            entirely inside your browser using the existing `xlsx` library. Nothing is sent anywhere.
+          </div>
+          <div
+            onDragOver={(e)=>{e.preventDefault();setDrag(true);}}
+            onDragLeave={()=>setDrag(false)}
+            onDrop={onDrop}
+            style={{
+              border:`2px dashed ${drag?C.ink:C.borderStrong}`,
+              borderRadius:S.r.lg, padding:'36px 20px', textAlign:'center',
+              background:drag?C.panelAlt:C.panel, transition:'all .15s',
+            }}
+          >
+            <div style={{fontSize:'13px',color:C.inkSub,marginBottom:'12px'}}>
+              Drag and drop an .xlsx, .xls, or .csv file here
+            </div>
+            <Btn variant="primary" onClick={()=>fileInputRef.current && fileInputRef.current.click()}>
+              Choose File
+            </Btn>
+            <input
+              ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv"
+              style={{display:'none'}} onChange={onFileInputChange}
+            />
+            {fileName ? (
+              <div style={{marginTop:'16px',fontSize:'12.5px',color:C.inkMute}}>
+                Selected: <strong style={{color:C.ink}}>{fileName}</strong>
+                {fileSize!=null ? ` (${(fileSize/1024).toFixed(1)} KB)` : ''}
+                <div style={{marginTop:'8px'}}>
+                  <Btn variant="ghost" size="sm" onClick={resetAll}>Clear File</Btn>
+                </div>
+              </div>
+            ) : (
+              <div style={{marginTop:'16px',fontSize:'12px',color:C.inkFaint}}>
+                No file selected yet.
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {stage!=='start' && workbook && (
+        <Card style={{padding:'20px'}}>
+          <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
+            {['review','mapping','preview','validation','summary'].map(s=>(
+              <Pill key={s} color={stage===s?'#1B2A5E':'#9A9484'} soft={stage!==s}>
+                {s==='review'?'Workbook Review':s==='mapping'?'Column Mapping':s==='preview'?'Data Preview':s==='validation'?'Validation Review':'Import Summary'}
+              </Pill>
+            ))}
+          </div>
+
+          {stage==='review' && (
+            <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,color:C.ink}}>Workbook Review</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',fontSize:'12.5px',color:C.inkSub}}>
+                <div>Filename: <strong>{fileName}</strong></div>
+                <div>Format: <strong>{fileFormat}</strong></div>
+                <div>Worksheet count: <strong>{sheetNames.length}</strong></div>
+                <div>Selected worksheet: <strong>{selectedSheet}</strong></div>
+                <div>Detected row count: <strong>{rawRows.length}</strong></div>
+                <div>Detected column count: <strong>{headers.length}</strong></div>
+                <div>First source data row: <strong>{rawRows.length?2:'—'}</strong></div>
+              </div>
+              {sheetNames.length>1 && (
+                <div>
+                  <div style={{fontSize:'12px',color:C.inkMute,marginBottom:'4px'}}>Select worksheet</div>
+                  <Sel value={selectedSheet} onChange={(e)=>loadSheet(workbook, e.target.value)}>
+                    {sheetNames.map(n=><option key={n} value={n}>{n}</option>)}
+                  </Sel>
+                </div>
+              )}
+              <div>
+                <div style={{fontSize:'12px',color:C.inkMute,marginBottom:'6px'}}>Detected headers</div>
+                <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                  {headers.map(h=><Pill key={h} color="#3B4A73">{h}</Pill>)}
+                </div>
+              </div>
+              <div>
+                <Btn variant="primary" onClick={()=>setStage('mapping')} disabled={!rawRows.length}>
+                  Continue to Column Mapping
+                </Btn>
+              </div>
+            </div>
+          )}
+
+          {stage==='mapping' && (
+            <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,color:C.ink}}>Column Mapping</div>
+              <div style={{fontSize:'12px',color:C.inkMute}}>
+                Preview-only mapping. This is not final production mapping logic and does not write to
+                Package 004 or Package 006 tables.
+              </div>
+              <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12.5px'}}>
+                  <thead>
+                    <tr>
+                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Canonical Field</th>
+                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Source Column</th>
+                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Status</th>
+                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Required</th>
+                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Sample Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {WMIS_IMPORT_CANONICAL_FIELDS.map(f=>(
+                      <tr key={f.key} style={{borderTop:`1px solid ${C.borderSoft}`}}>
+                        <td style={{padding:'6px 8px'}}>{f.label}</td>
+                        <td style={{padding:'6px 8px'}}>
+                          <Sel value={mapping[f.key]||''} onChange={(e)=>setFieldMapping(f.key, e.target.value)}>
+                            <option value="">— Unmapped —</option>
+                            {headers.map(h=><option key={h} value={h}>{h}</option>)}
+                          </Sel>
+                        </td>
+                        <td style={{padding:'6px 8px'}}>
+                          {mapping[f.key] ? (autoFlags[f.key] ? <Pill color="#3B7D4F">Auto-detected</Pill> : <Pill color="#1B2A5E">Manual</Pill>) : <Pill color="#9A9484">Unmapped</Pill>}
+                        </td>
+                        <td style={{padding:'6px 8px'}}>{f.required ? <Pill color="#B14C3C">Required</Pill> : <span style={{color:C.inkFaint}}>Optional</span>}</td>
+                        <td style={{padding:'6px 8px',color:C.inkMute}}>{sampleValueFor(mapping[f.key])}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn variant="ghost" onClick={()=>setStage('review')}>Back to Workbook Review</Btn>
+                <Btn variant="primary" onClick={()=>setStage('preview')}>Continue to Data Preview</Btn>
+              </div>
+            </div>
+          )}
+
+          {stage==='preview' && (
+            <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,color:C.ink}}>Data Preview</div>
+              <div style={{fontSize:'12px',color:C.inkMute}}>
+                Total parsed rows: <strong>{preview.total}</strong> · Previewed rows: <strong>{preview.rows.length}</strong>
+                {preview.total>preview.rows.length ? ' · Preview truncated to first 100 rows.' : ''}
+              </div>
+              <div style={{overflowX:'auto',maxHeight:'420px',overflowY:'auto'}}>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
+                  <thead>
+                    <tr>
+                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute,position:'sticky',top:0,background:C.panel}}>Source Row</th>
+                      {WMIS_IMPORT_CANONICAL_FIELDS.map(f=>(
+                        <th key={f.key} style={{textAlign:'left',padding:'6px 8px',color:C.inkMute,position:'sticky',top:0,background:C.panel,whiteSpace:'nowrap'}}>{f.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.rows.map(r=>(
+                      <tr key={r.__sourceRow} style={{borderTop:`1px solid ${C.borderSoft}`}}>
+                        <td style={{padding:'6px 8px',color:C.inkFaint}}>{r.__sourceRow}</td>
+                        {WMIS_IMPORT_CANONICAL_FIELDS.map(f=>{
+                          const cell = r[f.key];
+                          if(WMIS_IMPORT_NUMERIC_FIELDS.has(f.key)){
+                            return (
+                              <td key={f.key} style={{padding:'6px 8px',whiteSpace:'nowrap'}}>
+                                {cell.isMissing ? <span style={{color:C.inkFaint}}>—</span>
+                                  : cell.isInvalid ? <span style={{color:'#B14C3C'}}>Invalid</span>
+                                  : cell.value.toFixed(5)}
+                              </td>
+                            );
+                          }
+                          return <td key={f.key} style={{padding:'6px 8px',whiteSpace:'nowrap'}}>{cell.text || <span style={{color:C.inkFaint}}>—</span>}</td>;
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn variant="ghost" onClick={()=>setStage('mapping')}>Back to Column Mapping</Btn>
+                <Btn variant="primary" onClick={()=>setStage('validation')}>Continue to Validation Review</Btn>
+              </div>
+            </div>
+          )}
+
+          {stage==='validation' && (
+            <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,color:C.ink}}>Validation Review</div>
+              <div style={{display:'flex',gap:'10px',flexWrap:'wrap'}}>
+                <Pill color="#B14C3C">Errors: {validation.errorCount}</Pill>
+                <Pill color="#B08A2E">Warnings: {validation.warningCount}</Pill>
+                <Pill color="#3B4A73">Info: {validation.infoCount}</Pill>
+                <Pill color="#3B7D4F">Preview Valid Rows: {validation.validRowCount}</Pill>
+                <Pill color="#B14C3C">Preview Invalid Rows: {validation.invalidRowCount}</Pill>
+              </div>
+              <div style={{fontSize:'12.5px',fontWeight:600,color: validation.errorCount>0 ? '#B14C3C' : '#3B7D4F'}}>
+                {validation.errorCount>0 ? 'Preview Has Errors — Not Ready for Future Promotion' : 'Preview Valid — Ready for Review'}
+              </div>
+              <div style={{maxHeight:'340px',overflowY:'auto',display:'flex',flexDirection:'column',gap:'6px'}}>
+                {validation.findings.map((f,i)=>(
+                  <div key={i} style={{display:'flex',gap:'8px',fontSize:'12px',padding:'6px 8px',borderRadius:S.r.sm,
+                    background: f.severity==='ERROR' ? '#FBEAE8' : f.severity==='WARNING' ? '#FBF3E2' : '#EEF1F7'}}>
+                    <Pill color={f.severity==='ERROR'?'#B14C3C':f.severity==='WARNING'?'#B08A2E':'#3B4A73'}>{f.severity}</Pill>
+                    <span style={{color:C.inkSub}}>
+                      {f.row!=null ? `Row ${f.row}: ` : ''}{f.field ? `[${f.field}] ` : ''}{f.message}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn variant="ghost" onClick={()=>setStage('preview')}>Back to Data Preview</Btn>
+                <Btn variant="primary" onClick={goToSummary}>Continue to Import Summary</Btn>
+              </div>
+            </div>
+          )}
+
+          {stage==='summary' && (
+            <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,color:C.ink}}>Local Import Summary</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',fontSize:'12.5px',color:C.inkSub}}>
+                <div>Filename: <strong>{fileName}</strong></div>
+                <div>Selected worksheet: <strong>{selectedSheet}</strong></div>
+                <div>Source row count: <strong>{preview.total}</strong></div>
+                <div>Preview row count: <strong>{preview.rows.length}</strong></div>
+                <div>Mapped-field count: <strong>{mappedFieldCount} / {WMIS_IMPORT_CANONICAL_FIELDS.length}</strong></div>
+                <div>Required-mapping status: <strong>{requiredMapped ? 'Complete' : 'Incomplete'}</strong></div>
+                <div>Validation errors: <strong>{validation.errorCount}</strong></div>
+                <div>Validation warnings: <strong>{validation.warningCount}</strong></div>
+                <div>Informational findings: <strong>{validation.infoCount}</strong></div>
+                <div>Local batch identifier: <strong>{batchId}</strong></div>
+                <div>Generated at: <strong>{generatedAt}</strong></div>
+                <div>Persistence status: <strong style={{color:'#B14C3C'}}>NOT PERSISTED</strong></div>
+                <div>Connection status: <strong style={{color:'#B14C3C'}}>DISCONNECTED</strong></div>
+                <div>Future target scope: <strong>STELLANTIS_CAMPAIGN</strong></div>
+              </div>
+              <div style={{fontSize:'12px',color:C.inkMute}}>
+                This is a Browser Session Only preview. Preview Prepared here is Ready for Future Connected Import
+                but has not been committed, uploaded, approved, promoted, or submitted anywhere.
+              </div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn variant="ghost" onClick={()=>setStage('validation')}>Back to Validation</Btn>
+                <Btn variant="ghost" onClick={resetAll}>Start New Preview</Btn>
+                <Btn variant="danger" onClick={resetAll}>Discard Preview</Btn>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+
 function WarrantyMISApp({areaSwitch,wmisTab,setWmisTab}){
   const [wmisOem,   setWmisOem]   = useState('ALL');
   const [wmisSearch,setWmisSearch]= useState('');
@@ -4291,7 +4873,7 @@ function WarrantyMISApp({areaSwitch,wmisTab,setWmisTab}){
           {wmisTab==='wmis-gm'                  && <GMWorkspace/>}
           {wmisTab==='wmis-stellantis'          && <StellantisWorkspace/>}
           {wmisTab==='wmis-parts'               && <WMIS_Placeholder id="wmis-parts"/>}
-          {wmisTab==='wmis-operations'          && <WMIS_Placeholder id="wmis-operations"/>}
+          {wmisTab==='wmis-operations'          && <WarrantyMISImportCenter/>}
         </div>
       </div>
     </div>
