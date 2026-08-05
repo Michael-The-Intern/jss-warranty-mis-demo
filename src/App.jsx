@@ -4253,13 +4253,76 @@ const WMIS_IMPORT_NUMERIC_FIELDS = new Set([
   'adjusted_part_expense','adjusted_lop_expense','adjusted_total_expense',
 ]);
 
+// Mapping-source model (Phase 2 revision): canonical fields may resolve from
+// a real detected worksheet header (SOURCE_COLUMN) or, only where explicitly
+// permitted below, from a single operator-entered batch-level value
+// (FIXED_VALUE) that applies identically to every previewed row. Row-specific
+// identifiers, dates, and financial values are never eligible for FIXED_VALUE.
+const WMIS_IMPORT_FIXED_VALUE_ALLOWED = new Set([
+  'campaign_number', 'billing_cycle_code', 'source_swrs_full_code', 'market_code',
+]);
+
+const WMIS_MAPPING_MODE_LABELS = {
+  UNMAPPED: 'Unmapped',
+  SOURCE_COLUMN: 'Source Column',
+  FIXED_VALUE: 'Fixed Value',
+};
+
+function wmisImpEmptyMapping(){
+  return { mode:'UNMAPPED', sourceColumn:'', fixedValue:'', autoDetected:false };
+}
+
+function wmisImpAllowedModes(fieldKey){
+  const modes = ['UNMAPPED', 'SOURCE_COLUMN'];
+  if(WMIS_IMPORT_FIXED_VALUE_ALLOWED.has(fieldKey)) modes.push('FIXED_VALUE');
+  return modes;
+}
+
+function wmisImpIsMapped(cfg){
+  return !!cfg && cfg.mode !== 'UNMAPPED';
+}
+
+// Resolves the effective mapping configuration for one canonical field against
+// one raw source row. Returns { text } or the numeric-parse shape, matching the
+// existing preview-cell shape used by wmisImpBuildPreviewRows.
+function wmisImpResolveFieldValue(field, cfg, rawRow){
+  const mode = cfg ? cfg.mode : 'UNMAPPED';
+  let rawValue;
+  if(mode === 'SOURCE_COLUMN' && cfg.sourceColumn){
+    rawValue = rawRow ? rawRow[cfg.sourceColumn] : undefined;
+  } else if(mode === 'FIXED_VALUE' && WMIS_IMPORT_FIXED_VALUE_ALLOWED.has(field.key)){
+    const trimmed = (cfg.fixedValue == null ? '' : String(cfg.fixedValue)).trim();
+    rawValue = trimmed === '' ? undefined : trimmed;
+  } else {
+    rawValue = undefined;
+  }
+  if(field.key === 'claim_paid_or_chargeback_date_raw'){
+    return { text: rawValue===undefined||rawValue===null ? '' : String(rawValue) };
+  }
+  if(WMIS_IMPORT_NUMERIC_FIELDS.has(field.key)){
+    return wmisImpParseNumeric(rawValue);
+  }
+  return { text: rawValue===undefined||rawValue===null ? '' : String(rawValue).trim() };
+}
+
+// Returns true when a required canonical field is satisfied by its current
+// mapping configuration, honoring the FIXED_VALUE allow-list.
+function wmisImpFieldResolved(field, cfg){
+  if(!cfg) return false;
+  if(cfg.mode === 'SOURCE_COLUMN') return !!cfg.sourceColumn;
+  if(cfg.mode === 'FIXED_VALUE' && WMIS_IMPORT_FIXED_VALUE_ALLOWED.has(field.key)){
+    return String(cfg.fixedValue == null ? '' : cfg.fixedValue).trim() !== '';
+  }
+  return false;
+}
+
 const WMIS_IMPORT_ALIASES = {
-  campaign_number:                  ['campaign','campaign_number','campaign_no','campaign_num'],
-  billing_cycle_code:               ['billing_cycle','billing_cycle_code','cycle','cycle_code'],
-  source_claim_number:              ['claim','claim_number','claim_no','claim_num'],
+  campaign_number:                  ['campaign','campaign_number','campaign_no','campaign_num','campaign_id','recall_campaign','recall_campaign_number'],
+  billing_cycle_code:               ['billing_cycle','billing_cycle_code','cycle','cycle_code','billing_period'],
+  source_claim_number:              ['claim','claim_number','claim_no','claim_num','claim_id'],
   vin:                               ['vin','vehicle_identification_number'],
-  source_swrs_full_code:             ['swrs','swrs_code','swrs_full_code','source_swrs_full_code'],
-  market_code:                       ['market','market_code'],
+  source_swrs_full_code:             ['swrs','swrs_code','swrs_full_code','source_swrs_full_code','swrs_group','swrs_group_code'],
+  market_code:                       ['market','market_code','country_market','sales_market'],
   source_debit_number:               ['debit','debit_number','debit_no'],
   claim_paid_or_chargeback_date_raw: ['claim_paid_date','chargeback_date','paid_or_chargeback_date','claim_paid_or_chargeback_date'],
   adjusted_part_expense:             ['adjusted_part_expense','adjusted_parts','part_expense_adjusted'],
@@ -4289,11 +4352,11 @@ function wmisImpAutoDetectMapping(headers){
       if(found){ match = found.raw; break; }
     }
     if(match){
-      mapping[field.key] = match;
+      mapping[field.key] = { mode:'SOURCE_COLUMN', sourceColumn:match, fixedValue:'', autoDetected:true };
       usedSourceCols.add(match);
       autoFlags[field.key] = true;
     } else {
-      mapping[field.key] = '';
+      mapping[field.key] = wmisImpEmptyMapping();
       autoFlags[field.key] = false;
     }
   }
@@ -4314,15 +4377,7 @@ function wmisImpBuildPreviewRows(rawRows, mapping, limit){
   const rows = rawRows.slice(0, limit).map((raw, idx)=>{
     const out = { __sourceRow: idx+2 };
     for(const field of WMIS_IMPORT_CANONICAL_FIELDS){
-      const col = mapping[field.key];
-      const raw_v = col ? raw[col] : undefined;
-      if(field.key==='claim_paid_or_chargeback_date_raw'){
-        out[field.key] = { text: raw_v===undefined||raw_v===null ? '' : String(raw_v) };
-      } else if(WMIS_IMPORT_NUMERIC_FIELDS.has(field.key)){
-        out[field.key] = wmisImpParseNumeric(raw_v);
-      } else {
-        out[field.key] = { text: raw_v===undefined||raw_v===null ? '' : String(raw_v).trim() };
-      }
+      out[field.key] = wmisImpResolveFieldValue(field, mapping[field.key], raw);
     }
     return out;
   });
@@ -4331,11 +4386,16 @@ function wmisImpBuildPreviewRows(rawRows, mapping, limit){
 
 function wmisImpValidate(previewRows, totalRowCount, mapping, headers){
   const findings = [];
-  const requiredKeys = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>f.required).map(f=>f.key);
+  const requiredFields = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>f.required);
+  const requiredKeys = requiredFields.map(f=>f.key);
 
-  for(const key of requiredKeys){
-    if(!mapping[key]){
-      findings.push({ severity:'ERROR', field:key, row:null, message:`Required canonical field "${key}" has no source-column mapping.` });
+  for(const field of requiredFields){
+    if(!wmisImpFieldResolved(field, mapping[field.key])){
+      const cfg = mapping[field.key];
+      const msg = (cfg && cfg.mode==='FIXED_VALUE')
+        ? `Required canonical field "${field.key}" has a blank fixed value.`
+        : `Required canonical field "${field.key}" has no source-column mapping.`;
+      findings.push({ severity:'ERROR', field:field.key, row:null, message: msg });
     }
   }
 
@@ -4355,35 +4415,35 @@ function wmisImpValidate(previewRows, totalRowCount, mapping, headers){
   const dupeCombo = new Map();
   previewRows.forEach(r=>{
     for(const key of requiredKeys){
-      if(mapping[key] && r[key] && r[key].text===''){
+      if(mapping[key] && mapping[key].mode==='SOURCE_COLUMN' && r[key] && r[key].text===''){
         findings.push({ severity:'ERROR', field:key, row:r.__sourceRow, message:`Required mapped field "${key}" is blank on this row.` });
       }
     }
     for(const key of WMIS_IMPORT_NUMERIC_FIELDS){
-      if(mapping[key] && r[key] && r[key].isInvalid){
+      if(wmisImpIsMapped(mapping[key]) && r[key] && r[key].isInvalid){
         findings.push({ severity:'ERROR', field:key, row:r.__sourceRow, message:`Value in "${key}" cannot be parsed as numeric.` });
       }
     }
-    if(mapping.vin && r.vin && r.vin.text && r.vin.text.length!==17){
+    if(wmisImpIsMapped(mapping.vin) && r.vin && r.vin.text && r.vin.text.length!==17){
       findings.push({ severity:'WARNING', field:'vin', row:r.__sourceRow, message:`VIN is present but is not 17 characters (found ${r.vin.text.length}).` });
     }
-    const part = mapping.adjusted_part_expense && r.adjusted_part_expense ? r.adjusted_part_expense.value : null;
-    const lop  = mapping.adjusted_lop_expense  && r.adjusted_lop_expense  ? r.adjusted_lop_expense.value  : null;
-    const tot  = mapping.adjusted_total_expense && r.adjusted_total_expense ? r.adjusted_total_expense.value : null;
+    const part = wmisImpIsMapped(mapping.adjusted_part_expense) && r.adjusted_part_expense ? r.adjusted_part_expense.value : null;
+    const lop  = wmisImpIsMapped(mapping.adjusted_lop_expense)  && r.adjusted_lop_expense  ? r.adjusted_lop_expense.value  : null;
+    const tot  = wmisImpIsMapped(mapping.adjusted_total_expense) && r.adjusted_total_expense ? r.adjusted_total_expense.value : null;
     if(part!==null && lop!==null && tot!==null){
       const expected = Math.round((part+lop)*100000)/100000;
       if(Math.abs(expected-tot) > 0.00001){
         findings.push({ severity:'WARNING', field:'adjusted_total_expense', row:r.__sourceRow, message:`Adjusted total (${tot}) does not equal adjusted part + adjusted LOP (${expected}) at five-decimal precision.` });
       }
     }
-    if(mapping.claim_paid_or_chargeback_date_raw && r.claim_paid_or_chargeback_date_raw){
+    if(wmisImpIsMapped(mapping.claim_paid_or_chargeback_date_raw) && r.claim_paid_or_chargeback_date_raw){
       findings.push({ severity:'INFO', field:'claim_paid_or_chargeback_date_raw', row:r.__sourceRow, message:'Source date value preserved as raw text — not parsed.' });
     }
     const comboKey = [
-      mapping.campaign_number && r.campaign_number ? r.campaign_number.text : '',
-      mapping.source_claim_number && r.source_claim_number ? r.source_claim_number.text : '',
-      mapping.source_swrs_full_code && r.source_swrs_full_code ? r.source_swrs_full_code.text : '',
-      mapping.market_code && r.market_code ? r.market_code.text : '',
+      wmisImpIsMapped(mapping.campaign_number) && r.campaign_number ? r.campaign_number.text : '',
+      wmisImpIsMapped(mapping.source_claim_number) && r.source_claim_number ? r.source_claim_number.text : '',
+      wmisImpIsMapped(mapping.source_swrs_full_code) && r.source_swrs_full_code ? r.source_swrs_full_code.text : '',
+      wmisImpIsMapped(mapping.market_code) && r.market_code ? r.market_code.text : '',
     ].join('||');
     if(comboKey!=='||||'){
       if(dupeCombo.has(comboKey)){
@@ -4394,7 +4454,7 @@ function wmisImpValidate(previewRows, totalRowCount, mapping, headers){
   });
 
   for(const field of WMIS_IMPORT_CANONICAL_FIELDS){
-    if(!field.required && !mapping[field.key]){
+    if(!field.required && !wmisImpIsMapped(mapping[field.key])){
       findings.push({ severity:'INFO', field:field.key, row:null, message:`Optional field "${field.key}" remained unmapped.` });
     }
   }
@@ -4431,12 +4491,40 @@ function wmisSanitizeIdPart(key){
   return String(key==null?'':key).replace(/[^a-zA-Z0-9_-]/g,'_');
 }
 
+// Compact Mapping Source control (Unmapped / Source Column / Fixed Value).
+// Uses the same neon-orange focused/open treatment as SearchableSourceColumnSelect.
+function WmisMappingSourceSelect({ id, value, allowedModes, onChange }){
+  const [focused, setFocused] = React.useState(false);
+  return (
+    <select
+      id={id}
+      value={value}
+      onChange={(e)=>onChange(e.target.value)}
+      onFocus={()=>setFocused(true)}
+      onBlur={()=>setFocused(false)}
+      style={{
+        width:'100%', boxSizing:'border-box', padding:'6px 8px',
+        fontSize:'12.5px', borderRadius:'6px', background:'#fff', color:C.ink,
+        border: focused ? `1.5px solid ${C.coral}` : `1px solid ${C.borderSoft}`,
+        outline:'none',
+        boxShadow: focused ? `0 0 0 3px rgba(232,85,31,0.22)` : 'none',
+        transition:'border-color 100ms, box-shadow 100ms',
+      }}
+    >
+      {allowedModes.map(m=>(
+        <option key={m} value={m}>{WMIS_MAPPING_MODE_LABELS[m]}</option>
+      ))}
+    </select>
+  );
+}
+
 function SearchableSourceColumnSelect({
   value, options, onChange, canonicalField, canonicalLabel,
   isOpen, onOpen, onClose, disabled
 }){
   const [search, setSearch] = React.useState('');
   const [highlight, setHighlight] = React.useState(0);
+  const [triggerFocused, setTriggerFocused] = React.useState(false);
   const wrapRef = React.useRef(null);
   const searchInputRef = React.useRef(null);
   const optionRefs = React.useRef({});
@@ -4547,21 +4635,30 @@ function SearchableSourceColumnSelect({
         onClick={()=>{ if(!disabled){ isOpen ? onClose() : onOpen(); } }}
         onKeyDown={handleTriggerKeyDown}
         title={value || 'Unmapped'}
+        onFocus={()=>setTriggerFocused(true)}
+        onBlur={()=>setTriggerFocused(false)}
         style={{
           display:'flex', alignItems:'center', justifyContent:'space-between',
           gap:'6px', width:'100%', boxSizing:'border-box',
           padding:'6px 8px', fontSize:'12.5px',
-          border:`1px solid ${C.borderSoft}`, borderRadius:'6px',
+          border: (isOpen || triggerFocused) ? `1.5px solid ${C.coral}` : `1px solid ${C.borderSoft}`,
+          borderRadius:'6px',
           background: disabled ? (C.panelMute||'#F0EEE7') : '#fff',
           color: value ? C.ink : C.inkFaint,
           cursor: disabled ? 'not-allowed' : 'pointer',
-          outline: isOpen ? `2px solid ${C.accent||'#1B2A5E'}` : 'none',
+          outline: 'none',
+          boxShadow: isOpen
+            ? `0 0 0 3px rgba(232,85,31,0.28), 0 0 10px rgba(255,122,61,0.35)`
+            : triggerFocused
+              ? `0 0 0 3px rgba(232,85,31,0.20)`
+              : 'none',
+          transition: 'border-color 100ms, box-shadow 100ms',
         }}
       >
         <span style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1}}>
           {displayLabel}
         </span>
-        <span aria-hidden="true" style={{flexShrink:0, color:C.inkFaint}}>▾</span>
+        <span aria-hidden="true" style={{flexShrink:0, color: isOpen ? C.coral : C.inkFaint}}>▾</span>
       </div>
 
       {isOpen && (
@@ -4591,8 +4688,8 @@ function SearchableSourceColumnSelect({
               aria-activedescendant={visibleList[highlight] ? `wmis-source-column-option-${idBase}-${highlight}` : undefined}
               style={{
                 width:'100%', boxSizing:'border-box', padding:'6px 8px',
-                fontSize:'12.5px', border:`1px solid ${C.borderSoft}`, borderRadius:'6px',
-                outline:'none',
+                fontSize:'12.5px', border:`1.5px solid ${C.coral}`, borderRadius:'6px',
+                outline:'none', boxShadow:`0 0 0 3px rgba(232,85,31,0.22)`,
               }}
             />
           </div>
@@ -4623,8 +4720,10 @@ function SearchableSourceColumnSelect({
                   style={{
                     padding:'6px 8px', fontSize:'12.5px', cursor:'pointer',
                     whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                    background: i===highlight ? (C.panelMute||'#F0EEE7') : 'transparent',
-                    color: opt.__unmapped ? C.inkFaint : C.ink,
+                    background: i===highlight ? 'rgba(255,122,61,0.16)' : (selected ? 'rgba(232,85,31,0.08)' : 'transparent'),
+                    borderLeft: i===highlight ? `3px solid ${C.coral}` : selected ? `3px solid rgba(232,85,31,0.45)` : '3px solid transparent',
+                    color: opt.__unmapped ? C.inkFaint : (selected ? C.coral : C.ink),
+                    fontWeight: selected ? 600 : 400,
                   }}
                 >
                   {opt.__unmapped ? '— Unmapped —' : opt.label}
@@ -4653,12 +4752,14 @@ function WarrantyMISImportCenter(){
   const [mapping, setMapping]     = React.useState({});
   const [autoFlags, setAutoFlags] = React.useState({});
   const [openSourceColumnField, setOpenSourceColumnField] = React.useState(null);
+  const [headerSearch, setHeaderSearch] = React.useState('');
   const fileInputRef = React.useRef(null);
 
   const resetAll = ()=>{
     setStage('start'); setDrag(false); setFileName(''); setFileSize(null); setFileFormat('');
     setError(''); setWorkbook(null); setSheetNames([]); setSelectedSheet('');
     setHeaders([]); setRawRows([]); setMapping({}); setAutoFlags({}); setOpenSourceColumnField(null);
+    setHeaderSearch('');
     if(fileInputRef.current) fileInputRef.current.value='';
   };
 
@@ -4669,6 +4770,7 @@ function WarrantyMISImportCenter(){
       const json = XLSX.utils.sheet_to_json(ws, { defval:'', raw:false });
       if(!json.length){
         setHeaders([]); setRawRows([]); setMapping({}); setAutoFlags({}); setOpenSourceColumnField(null);
+        setHeaderSearch('');
         setSelectedSheet(sheetName);
         setStage('review');
         return;
@@ -4680,6 +4782,7 @@ function WarrantyMISImportCenter(){
       setMapping(mp);
       setAutoFlags(af);
       setOpenSourceColumnField(null);
+      setHeaderSearch('');
       setSelectedSheet(sheetName);
       setStage('review');
     }catch(e){
@@ -4733,8 +4836,21 @@ function WarrantyMISImportCenter(){
   };
 
   const setFieldMapping = (fieldKey, sourceCol)=>{
-    setMapping(prev=>({ ...prev, [fieldKey]: sourceCol }));
+    setMapping(prev=>({ ...prev, [fieldKey]: { mode:'SOURCE_COLUMN', sourceColumn:sourceCol||'', fixedValue:'', autoDetected:false } }));
     setAutoFlags(prev=>({ ...prev, [fieldKey]: false }));
+  };
+
+  // Switches a canonical field's mapping mode. Changing modes always clears
+  // any value from the previously active mode so a stale source column or
+  // fixed value can never silently continue to supply normalized data.
+  const setFieldMode = (fieldKey, mode)=>{
+    setMapping(prev=>({ ...prev, [fieldKey]: { mode, sourceColumn:'', fixedValue:'', autoDetected:false } }));
+    setAutoFlags(prev=>({ ...prev, [fieldKey]: false }));
+    setOpenSourceColumnField(prev=>prev===fieldKey ? null : prev);
+  };
+
+  const setFieldFixedValue = (fieldKey, text)=>{
+    setMapping(prev=>({ ...prev, [fieldKey]: { ...(prev[fieldKey]||wmisImpEmptyMapping()), mode:'FIXED_VALUE', fixedValue:text } }));
   };
 
   const preview = React.useMemo(()=>{
@@ -4746,8 +4862,17 @@ function WarrantyMISImportCenter(){
     return wmisImpValidate(preview.rows, preview.total, mapping, headers);
   }, [preview, mapping, headers]);
 
-  const mappedFieldCount = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>mapping[f.key]).length;
-  const requiredMapped = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>f.required).every(f=>mapping[f.key]);
+  const mappedFieldCount = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>wmisImpIsMapped(mapping[f.key])).length;
+  const requiredMapped = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>f.required).every(f=>wmisImpFieldResolved(f, mapping[f.key]));
+
+  // Mapping-provenance counts for the Import Summary (Section 9 of the revision).
+  const sourceColumnMappedCount = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>mapping[f.key] && mapping[f.key].mode==='SOURCE_COLUMN' && mapping[f.key].sourceColumn).length;
+  const fixedValueMappedCount = WMIS_IMPORT_CANONICAL_FIELDS.filter(f=>mapping[f.key] && mapping[f.key].mode==='FIXED_VALUE' && String(mapping[f.key].fixedValue||'').trim()!=='').length;
+  const unmappedFieldCount = WMIS_IMPORT_CANONICAL_FIELDS.length - sourceColumnMappedCount - fixedValueMappedCount;
+  const fixedCampaignNumber = mapping.campaign_number && mapping.campaign_number.mode==='FIXED_VALUE' ? String(mapping.campaign_number.fixedValue||'').trim() : '';
+  const fixedBillingCycleCode = mapping.billing_cycle_code && mapping.billing_cycle_code.mode==='FIXED_VALUE' ? String(mapping.billing_cycle_code.fixedValue||'').trim() : '';
+  const fixedSwrsFullCode = mapping.source_swrs_full_code && mapping.source_swrs_full_code.mode==='FIXED_VALUE' ? String(mapping.source_swrs_full_code.fixedValue||'').trim() : '';
+  const fixedMarketCode = mapping.market_code && mapping.market_code.mode==='FIXED_VALUE' ? String(mapping.market_code.fixedValue||'').trim() : '';
 
   const [batchId, setBatchId] = React.useState('');
   const [generatedAt, setGeneratedAt] = React.useState('');
@@ -4762,6 +4887,16 @@ function WarrantyMISImportCenter(){
     const v = rawRows[0][col];
     if(v===undefined||v===null||v==='') return '—';
     return String(v).slice(0,40);
+  };
+
+  // Sample/context text for a mapping row, honoring the active mapping mode.
+  const sampleForField = (fieldKey)=>{
+    const cfg = mapping[fieldKey];
+    if(!cfg || cfg.mode==='UNMAPPED') return '—';
+    if(cfg.mode==='FIXED_VALUE'){
+      return String(cfg.fixedValue||'').trim()!=='' ? 'Applied to every preview row' : '—';
+    }
+    return sampleValueFor(cfg.sourceColumn);
   };
 
   return (
@@ -4861,6 +4996,58 @@ function WarrantyMISImportCenter(){
                   {headers.map(h=><Pill key={h} color="#3B4A73">{h}</Pill>)}
                 </div>
               </div>
+
+              {/* Detected Source Headers inspection (Section 10). Inspection-only:
+                  selecting a header here does not create a mapping. Helps the
+                  operator confirm whether a desired value exists under a
+                  different label, or is workbook-level context rather than a
+                  per-row column, before reaching Column Mapping. */}
+              <div>
+                <div style={{fontSize:'12px',fontWeight:600,color:C.ink,marginBottom:'6px'}}>
+                  Detected Source Headers <span style={{fontWeight:400,color:C.inkMute}}>({headers.length} total)</span>
+                </div>
+                <input
+                  type="text"
+                  value={headerSearch}
+                  onChange={(e)=>setHeaderSearch(e.target.value)}
+                  placeholder="Search detected headers..."
+                  aria-label="Search detected source headers"
+                  style={{
+                    width:'100%', boxSizing:'border-box', padding:'6px 8px', marginBottom:'8px',
+                    fontSize:'12.5px', borderRadius:'6px', border:`1px solid ${C.borderSoft}`, outline:'none',
+                  }}
+                  onFocus={(e)=>{ e.target.style.border = `1.5px solid ${C.coral}`; e.target.style.boxShadow = `0 0 0 3px rgba(232,85,31,0.22)`; }}
+                  onBlur={(e)=>{ e.target.style.border = `1px solid ${C.borderSoft}`; e.target.style.boxShadow = 'none'; }}
+                />
+                <div style={{maxHeight:'220px', overflowY:'auto', border:`1px solid ${C.borderSoft}`, borderRadius:'8px', padding:'8px'}}>
+                  {(()=>{
+                    const term = headerSearch.trim().toLowerCase();
+                    const shown = term ? headers.filter(h=>String(h).toLowerCase().includes(term)) : headers;
+                    if(shown.length===0){
+                      return <div style={{fontSize:'12px',color:C.inkFaint}}>{`No detected headers match “${headerSearch.trim()}”`}</div>;
+                    }
+                    return (
+                      <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                        {shown.map((h,i)=>(
+                          <span key={`${h}-${i}`} title={String(h)} style={{
+                            display:'inline-block', maxWidth:'260px', overflow:'hidden', textOverflow:'ellipsis',
+                            whiteSpace:'nowrap', padding:'4px 9px', borderRadius:'999px', fontSize:'11px',
+                            background:'#EDEBE3', color:C.inkSub, border:`1px solid ${C.borderSoft}`,
+                          }}>
+                            {h}
+                          </span>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+                <div style={{fontSize:'11px',color:C.inkFaint,marginTop:'6px'}}>
+                  Use this list to confirm whether Campaign, Billing Cycle, SWRS, or Market values exist as
+                  a real worksheet column, or represent workbook-level context better supplied as a Fixed
+                  Value in Column Mapping.
+                </div>
+              </div>
+
               <div>
                 <Btn variant="primary" onClick={()=>setStage('mapping')} disabled={!rawRows.length}>
                   Continue to Column Mapping
@@ -4874,42 +5061,91 @@ function WarrantyMISImportCenter(){
               <div style={{fontSize:'13px',fontWeight:600,color:C.ink}}>Column Mapping</div>
               <div style={{fontSize:'12px',color:C.inkMute}}>
                 Preview-only mapping. This is not final production mapping logic and does not write to
-                Package 004 or Package 006 tables.
+                Package 004 or Package 006 tables. Choose Source Column for row-specific values, or Fixed
+                Value only where a single batch-level value legitimately applies to every previewed row.
               </div>
               <div style={{overflowX:'auto', overflowY:'visible', paddingBottom:'4px'}}>
                 <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12.5px'}}>
                   <thead>
                     <tr>
                       <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Canonical Field</th>
-                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Source Column</th>
+                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Mapping Source</th>
+                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Source Column / Fixed Value</th>
                       <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Status</th>
                       <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Required</th>
-                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Sample Value</th>
+                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Sample</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {WMIS_IMPORT_CANONICAL_FIELDS.map(f=>(
+                    {WMIS_IMPORT_CANONICAL_FIELDS.map(f=>{
+                      const cfg = mapping[f.key] || wmisImpEmptyMapping();
+                      const allowedModes = wmisImpAllowedModes(f.key);
+                      const resolved = wmisImpFieldResolved(f, cfg);
+                      const modeSelectId = `wmis-mapping-source-mode-${wmisSanitizeIdPart(f.key)}`;
+                      const fixedInputId = `wmis-mapping-fixed-value-${wmisSanitizeIdPart(f.key)}`;
+                      return (
                       <tr key={f.key} style={{borderTop:`1px solid ${C.borderSoft}`}}>
                         <td style={{padding:'6px 8px'}}>{f.label}</td>
-                        <td style={{padding:'6px 8px', position:'relative', minWidth:'220px'}}>
-                          <SearchableSourceColumnSelect
-                            value={mapping[f.key]||''}
-                            options={headers}
-                            onChange={(v)=>setFieldMapping(f.key, v)}
-                            canonicalField={f.key}
-                            canonicalLabel={f.label}
-                            isOpen={openSourceColumnField===f.key}
-                            onOpen={()=>setOpenSourceColumnField(f.key)}
-                            onClose={()=>setOpenSourceColumnField(prev=>prev===f.key?null:prev)}
+                        <td style={{padding:'6px 8px', minWidth:'150px'}}>
+                          <label htmlFor={modeSelectId} style={{position:'absolute', width:1, height:1, overflow:'hidden', clip:'rect(0 0 0 0)'}}>
+                            {`Mapping Source for ${f.label}`}
+                          </label>
+                          <WmisMappingSourceSelect
+                            id={modeSelectId}
+                            value={cfg.mode}
+                            allowedModes={allowedModes}
+                            onChange={(m)=>setFieldMode(f.key, m)}
                           />
                         </td>
+                        <td style={{padding:'6px 8px', position:'relative', minWidth:'220px'}}>
+                          {cfg.mode==='SOURCE_COLUMN' ? (
+                            <SearchableSourceColumnSelect
+                              value={cfg.sourceColumn||''}
+                              options={headers}
+                              onChange={(v)=>setFieldMapping(f.key, v)}
+                              canonicalField={f.key}
+                              canonicalLabel={f.label}
+                              isOpen={openSourceColumnField===f.key}
+                              onOpen={()=>setOpenSourceColumnField(f.key)}
+                              onClose={()=>setOpenSourceColumnField(prev=>prev===f.key?null:prev)}
+                            />
+                          ) : cfg.mode==='FIXED_VALUE' ? (
+                            <>
+                              <label htmlFor={fixedInputId} style={{position:'absolute', width:1, height:1, overflow:'hidden', clip:'rect(0 0 0 0)'}}>
+                                {`Fixed value for ${f.label}`}
+                              </label>
+                              <input
+                                id={fixedInputId}
+                                type="text"
+                                value={cfg.fixedValue||''}
+                                onChange={(e)=>setFieldFixedValue(f.key, e.target.value)}
+                                placeholder={`Enter fixed ${f.label}`}
+                                style={{
+                                  width:'100%', boxSizing:'border-box', padding:'6px 8px',
+                                  fontSize:'12.5px', borderRadius:'6px',
+                                  border:`1px solid ${C.borderSoft}`, outline:'none',
+                                }}
+                                onFocus={(e)=>{ e.target.style.border = `1.5px solid ${C.coral}`; e.target.style.boxShadow = `0 0 0 3px rgba(232,85,31,0.22)`; }}
+                                onBlur={(e)=>{ e.target.style.border = `1px solid ${C.borderSoft}`; e.target.style.boxShadow = 'none'; }}
+                              />
+                            </>
+                          ) : (
+                            <span style={{fontSize:'12px',color:C.inkFaint}}>—</span>
+                          )}
+                        </td>
                         <td style={{padding:'6px 8px'}}>
-                          {mapping[f.key] ? (autoFlags[f.key] ? <Pill color="#3B7D4F">Auto-detected</Pill> : <Pill color="#1B2A5E">Manual</Pill>) : <Pill color="#9A9484">Unmapped</Pill>}
+                          {cfg.mode==='UNMAPPED'
+                            ? <Pill color="#9A9484">Unmapped</Pill>
+                            : cfg.mode==='FIXED_VALUE'
+                              ? (resolved ? <Pill color="#B14C3C" soft={false}>Fixed Value</Pill> : <Pill color="#9A9484">Unmapped</Pill>)
+                              : (cfg.autoDetected ? <Pill color="#3B7D4F">Auto-detected</Pill> : <Pill color="#1B2A5E">Manual</Pill>)
+                          }
                         </td>
                         <td style={{padding:'6px 8px'}}>{f.required ? <Pill color="#B14C3C">Required</Pill> : <span style={{color:C.inkFaint}}>Optional</span>}</td>
-                        <td style={{padding:'6px 8px',color:C.inkMute}}>{sampleValueFor(mapping[f.key])}</td>
+                        <td style={{padding:'6px 8px',color:C.inkMute}}>{sampleForField(f.key)}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -5016,6 +5252,22 @@ function WarrantyMISImportCenter(){
                 <div>Connection status: <strong style={{color:'#B14C3C'}}>DISCONNECTED</strong></div>
                 <div>Future target scope: <strong>STELLANTIS_CAMPAIGN</strong></div>
               </div>
+
+              {/* Mapping provenance summary (Section 9). Distinguishes Source
+                  Column, Fixed Value, and Unmapped fields without revealing
+                  confidential workbook row values. */}
+              <div style={{fontSize:'13px',fontWeight:600,color:C.ink,marginTop:'4px'}}>Mapping Provenance</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',fontSize:'12.5px',color:C.inkSub}}>
+                <div>Source Column mappings: <strong>{sourceColumnMappedCount}</strong></div>
+                <div>Fixed Value mappings: <strong>{fixedValueMappedCount}</strong></div>
+                <div>Unmapped fields: <strong>{unmappedFieldCount}</strong></div>
+                <div>Required fields resolved: <strong>{requiredMapped ? 'Yes' : 'No'}</strong></div>
+                {fixedCampaignNumber ? <div>Fixed Campaign Number: <strong>{fixedCampaignNumber}</strong></div> : null}
+                {fixedBillingCycleCode ? <div>Fixed Billing Cycle Code: <strong>{fixedBillingCycleCode}</strong></div> : null}
+                {fixedSwrsFullCode ? <div>Fixed SWRS Full Code: <strong>{fixedSwrsFullCode}</strong></div> : null}
+                {fixedMarketCode ? <div>Fixed Market Code: <strong>{fixedMarketCode}</strong></div> : null}
+              </div>
+
               <div style={{fontSize:'12px',color:C.inkMute}}>
                 This is a Browser Session Only preview. Preview Prepared here is Ready for Future Connected Import
                 but has not been committed, uploaded, approved, promoted, or submitted anywhere.
