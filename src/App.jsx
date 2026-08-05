@@ -4420,6 +4420,224 @@ function wmisImpMakeBatchId(){
 
 const WMIS_IMPORT_PREVIEW_ROW_LIMIT = 100;
 
+// ══════════════════════════════════════════════════════════════════════════
+// SearchableSourceColumnSelect — Phase 2 usability revision.
+// A searchable combobox for choosing a workbook source-column header for a
+// canonical field. UI/local state only: it does not read workbook rows, does
+// not persist anything, and does not perform network calls.
+// ══════════════════════════════════════════════════════════════════════════
+
+function wmisSanitizeIdPart(key){
+  return String(key==null?'':key).replace(/[^a-zA-Z0-9_-]/g,'_');
+}
+
+function SearchableSourceColumnSelect({
+  value, options, onChange, canonicalField, canonicalLabel,
+  isOpen, onOpen, onClose, disabled
+}){
+  const [search, setSearch] = React.useState('');
+  const [highlight, setHighlight] = React.useState(0);
+  const wrapRef = React.useRef(null);
+  const searchInputRef = React.useRef(null);
+  const optionRefs = React.useRef({});
+
+  const idBase = wmisSanitizeIdPart(canonicalField);
+  const comboId = `wmis-source-column-combobox-${idBase}`;
+  const listboxId = `wmis-source-column-listbox-${idBase}`;
+  const searchId = `wmis-source-column-search-${idBase}`;
+
+  const trimmed = search.trim().toLowerCase();
+  const filtered = trimmed
+    ? options.filter(h => String(h).toLowerCase().includes(trimmed))
+    : options;
+
+  const visibleList = [{ __unmapped:true, label:'— Unmapped —' }].concat(
+    filtered.map(h => ({ __unmapped:false, label:h }))
+  );
+
+  React.useEffect(()=>{
+    if(isOpen){
+      setSearch('');
+      setHighlight(0);
+      const t = setTimeout(()=>{ if(searchInputRef.current) searchInputRef.current.focus(); }, 0);
+      return ()=>clearTimeout(t);
+    }
+  },[isOpen]);
+
+  React.useEffect(()=>{
+    if(!isOpen) return;
+    setHighlight(0);
+  },[trimmed, isOpen]);
+
+  React.useEffect(()=>{
+    if(!isOpen) return;
+    function handleDocClick(e){
+      if(wrapRef.current && !wrapRef.current.contains(e.target)){
+        onClose();
+      }
+    }
+    document.addEventListener('mousedown', handleDocClick);
+    return ()=>document.removeEventListener('mousedown', handleDocClick);
+  },[isOpen, onClose]);
+
+  React.useEffect(()=>{
+    if(!isOpen) return;
+    const el = optionRefs.current[highlight];
+    if(el && el.scrollIntoView){ el.scrollIntoView({ block:'nearest' }); }
+  },[highlight, isOpen]);
+
+  const selectOption = (opt)=>{
+    onChange(opt.__unmapped ? '' : opt.label);
+    setSearch('');
+    onClose();
+    setTimeout(()=>{
+      const trigger = document.getElementById(comboId);
+      if(trigger) trigger.focus();
+    },0);
+  };
+
+  const handleTriggerKeyDown = (e)=>{
+    if(disabled) return;
+    if(e.key==='Enter' || e.key===' ' || e.key==='ArrowDown'){
+      e.preventDefault();
+      onOpen();
+    }
+  };
+
+  const handleSearchKeyDown = (e)=>{
+    if(e.key==='ArrowDown'){
+      e.preventDefault();
+      setHighlight(h=>Math.min(h+1, visibleList.length-1));
+    } else if(e.key==='ArrowUp'){
+      e.preventDefault();
+      setHighlight(h=>Math.max(h-1, 0));
+    } else if(e.key==='Home'){
+      e.preventDefault();
+      setHighlight(0);
+    } else if(e.key==='End'){
+      e.preventDefault();
+      setHighlight(visibleList.length-1);
+    } else if(e.key==='Enter'){
+      e.preventDefault();
+      const opt = visibleList[highlight];
+      if(opt) selectOption(opt);
+    } else if(e.key==='Escape'){
+      e.preventDefault();
+      setSearch('');
+      onClose();
+      const trigger = document.getElementById(comboId);
+      if(trigger) trigger.focus();
+    } else if(e.key==='Tab'){
+      onClose();
+    }
+  };
+
+  const displayLabel = value || 'Unmapped';
+
+  return (
+    <div ref={wrapRef} style={{position:'relative', width:'100%'}}>
+      <div
+        id={comboId}
+        role="combobox"
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
+        aria-controls={listboxId}
+        aria-label={`Source Column for ${canonicalLabel}`}
+        tabIndex={disabled?-1:0}
+        onClick={()=>{ if(!disabled){ isOpen ? onClose() : onOpen(); } }}
+        onKeyDown={handleTriggerKeyDown}
+        title={value || 'Unmapped'}
+        style={{
+          display:'flex', alignItems:'center', justifyContent:'space-between',
+          gap:'6px', width:'100%', boxSizing:'border-box',
+          padding:'6px 8px', fontSize:'12.5px',
+          border:`1px solid ${C.borderSoft}`, borderRadius:'6px',
+          background: disabled ? (C.panelMute||'#F0EEE7') : '#fff',
+          color: value ? C.ink : C.inkFaint,
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          outline: isOpen ? `2px solid ${C.accent||'#1B2A5E'}` : 'none',
+        }}
+      >
+        <span style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1}}>
+          {displayLabel}
+        </span>
+        <span aria-hidden="true" style={{flexShrink:0, color:C.inkFaint}}>▾</span>
+      </div>
+
+      {isOpen && (
+        <div
+          style={{
+            position:'absolute', top:'calc(100% + 4px)', left:0,
+            minWidth:'100%', maxWidth:'420px', width:'max-content',
+            background:'#fff', border:`1px solid ${C.borderSoft}`,
+            borderRadius:'8px', boxShadow:'0 6px 18px rgba(0,0,0,0.12)',
+            zIndex:1000, maxHeight:'280px', display:'flex', flexDirection:'column',
+          }}
+        >
+          <div style={{padding:'6px', borderBottom:`1px solid ${C.borderSoft}`}}>
+            <label htmlFor={searchId} style={{position:'absolute', width:1, height:1, overflow:'hidden', clip:'rect(0 0 0 0)'}}>
+              {`Search source columns for ${canonicalLabel}`}
+            </label>
+            <input
+              ref={searchInputRef}
+              id={searchId}
+              type="text"
+              value={search}
+              onChange={(e)=>setSearch(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Search source columns..."
+              aria-autocomplete="list"
+              aria-controls={listboxId}
+              aria-activedescendant={visibleList[highlight] ? `wmis-source-column-option-${idBase}-${highlight}` : undefined}
+              style={{
+                width:'100%', boxSizing:'border-box', padding:'6px 8px',
+                fontSize:'12.5px', border:`1px solid ${C.borderSoft}`, borderRadius:'6px',
+                outline:'none',
+              }}
+            />
+          </div>
+          <div
+            id={listboxId}
+            role="listbox"
+            aria-label={`Source columns for ${canonicalLabel}`}
+            style={{overflowY:'auto', flex:1}}
+          >
+            {(filtered.length===0 && trimmed) ? (
+              <div style={{padding:'10px 8px', fontSize:'12px', color:C.inkFaint}}>
+                {`No source columns match \u201c${search.trim()}\u201d`}
+              </div>
+            ) : null}
+            {visibleList.map((opt, i)=>{
+              const optId = `wmis-source-column-option-${idBase}-${i}`;
+              const selected = opt.__unmapped ? !value : value===opt.label;
+              return (
+                <div
+                  key={optId}
+                  id={optId}
+                  ref={el=>{ optionRefs.current[i]=el; }}
+                  role="option"
+                  aria-selected={selected}
+                  onMouseEnter={()=>setHighlight(i)}
+                  onClick={()=>selectOption(opt)}
+                  title={opt.__unmapped ? 'Unmapped' : String(opt.label)}
+                  style={{
+                    padding:'6px 8px', fontSize:'12.5px', cursor:'pointer',
+                    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                    background: i===highlight ? (C.panelMute||'#F0EEE7') : 'transparent',
+                    color: opt.__unmapped ? C.inkFaint : C.ink,
+                  }}
+                >
+                  {opt.__unmapped ? '— Unmapped —' : opt.label}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WarrantyMISImportCenter(){
   const [stage, setStage]         = React.useState('start'); // start | review | mapping | preview | validation | summary
   const [drag, setDrag]           = React.useState(false);
@@ -4434,12 +4652,13 @@ function WarrantyMISImportCenter(){
   const [rawRows, setRawRows]     = React.useState([]);
   const [mapping, setMapping]     = React.useState({});
   const [autoFlags, setAutoFlags] = React.useState({});
+  const [openSourceColumnField, setOpenSourceColumnField] = React.useState(null);
   const fileInputRef = React.useRef(null);
 
   const resetAll = ()=>{
     setStage('start'); setDrag(false); setFileName(''); setFileSize(null); setFileFormat('');
     setError(''); setWorkbook(null); setSheetNames([]); setSelectedSheet('');
-    setHeaders([]); setRawRows([]); setMapping({}); setAutoFlags({});
+    setHeaders([]); setRawRows([]); setMapping({}); setAutoFlags({}); setOpenSourceColumnField(null);
     if(fileInputRef.current) fileInputRef.current.value='';
   };
 
@@ -4449,7 +4668,7 @@ function WarrantyMISImportCenter(){
       if(!ws){ setError('Selected worksheet could not be read.'); return; }
       const json = XLSX.utils.sheet_to_json(ws, { defval:'', raw:false });
       if(!json.length){
-        setHeaders([]); setRawRows([]); setMapping({}); setAutoFlags({});
+        setHeaders([]); setRawRows([]); setMapping({}); setAutoFlags({}); setOpenSourceColumnField(null);
         setSelectedSheet(sheetName);
         setStage('review');
         return;
@@ -4460,6 +4679,7 @@ function WarrantyMISImportCenter(){
       setRawRows(json);
       setMapping(mp);
       setAutoFlags(af);
+      setOpenSourceColumnField(null);
       setSelectedSheet(sheetName);
       setStage('review');
     }catch(e){
@@ -4656,7 +4876,7 @@ function WarrantyMISImportCenter(){
                 Preview-only mapping. This is not final production mapping logic and does not write to
                 Package 004 or Package 006 tables.
               </div>
-              <div style={{overflowX:'auto'}}>
+              <div style={{overflowX:'auto', overflowY:'visible', paddingBottom:'4px'}}>
                 <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12.5px'}}>
                   <thead>
                     <tr>
@@ -4671,11 +4891,17 @@ function WarrantyMISImportCenter(){
                     {WMIS_IMPORT_CANONICAL_FIELDS.map(f=>(
                       <tr key={f.key} style={{borderTop:`1px solid ${C.borderSoft}`}}>
                         <td style={{padding:'6px 8px'}}>{f.label}</td>
-                        <td style={{padding:'6px 8px'}}>
-                          <Sel value={mapping[f.key]||''} onChange={(e)=>setFieldMapping(f.key, e.target.value)}>
-                            <option value="">— Unmapped —</option>
-                            {headers.map(h=><option key={h} value={h}>{h}</option>)}
-                          </Sel>
+                        <td style={{padding:'6px 8px', position:'relative', minWidth:'220px'}}>
+                          <SearchableSourceColumnSelect
+                            value={mapping[f.key]||''}
+                            options={headers}
+                            onChange={(v)=>setFieldMapping(f.key, v)}
+                            canonicalField={f.key}
+                            canonicalLabel={f.label}
+                            isOpen={openSourceColumnField===f.key}
+                            onOpen={()=>setOpenSourceColumnField(f.key)}
+                            onClose={()=>setOpenSourceColumnField(prev=>prev===f.key?null:prev)}
+                          />
                         </td>
                         <td style={{padding:'6px 8px'}}>
                           {mapping[f.key] ? (autoFlags[f.key] ? <Pill color="#3B7D4F">Auto-detected</Pill> : <Pill color="#1B2A5E">Manual</Pill>) : <Pill color="#9A9484">Unmapped</Pill>}
