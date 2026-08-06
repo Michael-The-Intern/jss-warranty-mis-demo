@@ -4990,14 +4990,7 @@ function WarrantyMISImportCenter(){
                   </Sel>
                 </div>
               )}
-              <div>
-                <div style={{fontSize:'12px',color:C.inkMute,marginBottom:'6px'}}>Detected headers</div>
-                <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
-                  {headers.map(h=><Pill key={h} color="#3B4A73">{h}</Pill>)}
-                </div>
-              </div>
-
-              {/* Detected Source Headers inspection (Section 10). Inspection-only:
+{/* Detected Source Headers inspection (Section 10). Inspection-only:
                   selecting a header here does not create a mapping. Helps the
                   operator confirm whether a desired value exists under a
                   different label, or is workbook-level context rather than a
@@ -5006,19 +4999,44 @@ function WarrantyMISImportCenter(){
                 <div style={{fontSize:'12px',fontWeight:600,color:C.ink,marginBottom:'6px'}}>
                   Detected Source Headers <span style={{fontWeight:400,color:C.inkMute}}>({headers.length} total)</span>
                 </div>
-                <input
-                  type="text"
-                  value={headerSearch}
-                  onChange={(e)=>setHeaderSearch(e.target.value)}
-                  placeholder="Search detected headers..."
-                  aria-label="Search detected source headers"
-                  style={{
-                    width:'100%', boxSizing:'border-box', padding:'6px 8px', marginBottom:'8px',
-                    fontSize:'12.5px', borderRadius:'6px', border:`1px solid ${C.borderSoft}`, outline:'none',
-                  }}
-                  onFocus={(e)=>{ e.target.style.border = `1.5px solid ${C.coral}`; e.target.style.boxShadow = `0 0 0 3px rgba(232,85,31,0.22)`; }}
-                  onBlur={(e)=>{ e.target.style.border = `1px solid ${C.borderSoft}`; e.target.style.boxShadow = 'none'; }}
-                />
+                <div style={{display:'flex',gap:'8px',alignItems:'center',marginBottom:'6px'}}>
+                  <input
+                    type="text"
+                    value={headerSearch}
+                    onChange={(e)=>setHeaderSearch(e.target.value)}
+                    placeholder="Search detected headers..."
+                    aria-label="Search detected source headers"
+                    style={{
+                      flex:1, boxSizing:'border-box', padding:'6px 8px',
+                      fontSize:'12.5px', borderRadius:'6px', border:`1px solid ${C.borderSoft}`, outline:'none',
+                    }}
+                    onFocus={(e)=>{ e.target.style.border = `1.5px solid ${C.coral}`; e.target.style.boxShadow = `0 0 0 3px rgba(232,85,31,0.22)`; }}
+                    onBlur={(e)=>{ e.target.style.border = `1px solid ${C.borderSoft}`; e.target.style.boxShadow = 'none'; }}
+                  />
+                  <button
+                    type="button"
+                    onClick={()=>setHeaderSearch('')}
+                    disabled={!headerSearch.trim()}
+                    aria-label="Clear detected header search"
+                    style={{
+                      padding:'6px 12px', fontSize:'12px', borderRadius:'6px', border:`1px solid ${C.borderSoft}`,
+                      background: headerSearch.trim() ? '#FFFFFF' : '#F3F1EA',
+                      color: headerSearch.trim() ? C.ink : C.inkFaint,
+                      cursor: headerSearch.trim() ? 'pointer' : 'default',
+                    }}
+                    onFocus={(e)=>{ if(headerSearch.trim()){ e.target.style.border = `1.5px solid ${C.coral}`; e.target.style.boxShadow = `0 0 0 3px rgba(232,85,31,0.22)`; } }}
+                    onBlur={(e)=>{ e.target.style.border = `1px solid ${C.borderSoft}`; e.target.style.boxShadow = 'none'; }}
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div style={{fontSize:'11px',color:C.inkFaint,marginBottom:'6px'}}>
+                  {(()=>{
+                    const term = headerSearch.trim().toLowerCase();
+                    const filteredCount = term ? headers.filter(h=>String(h).toLowerCase().includes(term)).length : headers.length;
+                    return `Showing ${filteredCount} of ${headers.length} headers`;
+                  })()}
+                </div>
                 <div style={{maxHeight:'220px', overflowY:'auto', border:`1px solid ${C.borderSoft}`, borderRadius:'8px', padding:'8px'}}>
                   {(()=>{
                     const term = headerSearch.trim().toLowerCase();
