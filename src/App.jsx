@@ -426,7 +426,7 @@ function SmartImporter({camps,parts,vinCounts,onImportVINs,onImportParts,onClose
         {/* Progress */}
         <div style={{padding:'10px 22px',background:C.bg,borderBottom:`1px solid ${C.borderSoft}`,display:'flex',gap:'6px',alignItems:'center',flexShrink:0}}>
           {['Upload','Detect','Map Columns','Preview & Import'].map((s,i)=>{
-            const stageIdx={upload:0,sheet:1,mapping:1,preview:2,done:3}[stage];
+            const stageIdx={upload:0,sheet:1,review:1,classify:1,mapping:1,preview:2,validation:2,summary:3,done:3}[stage];
             const active=i<=stageIdx;
             return <React.Fragment key={s}>
               {i>0&&<div style={{flex:1,height:'2px',background:active?C.navy:'#ddd',borderRadius:'2px'}}/>}
@@ -2305,9 +2305,6 @@ function riRelIndicator(rec){
   const short = {supersedes:'Supersedes',supersededBy:'Superseded by',expands:'Expands',expandedBy:'Expanded by'};
   return types.map(t=>short[t]||t).join(' · ');
 }
-function getNhtsaRecallUrl(nhtsaId) {
-  return `https://www.nhtsa.gov/recalls?nhtsaId=${encodeURIComponent(nhtsaId)}`;
-}
 
 function RI_KPI({label,value,sub,accent}){
   return (
@@ -2362,8 +2359,8 @@ function RecallDetail({rec,onClose}){
           <KV k="Manufacturer Campaign(s)" v={rec.mfrCampaignNumbers.length?rec.mfrCampaignNumbers.join(', '):rec.mfrCampaignNumberRaw}/>
           <KV k="Recall Type" v={rec.recallType}/>
           <KV k="Report Received" v={rec.reportReceivedDate}/>
-          <KV k="Source Link" v={rec.nhtsaId
-            ? <a href={getNhtsaRecallUrl(rec.nhtsaId)} target="_blank" rel="noopener noreferrer" style={{color:C.coral,textDecoration:'underline'}}>View on NHTSA.gov</a>
+          <KV k="Source Link" v={rec.recallLink
+            ? <a href={rec.recallLink} target="_blank" rel="noopener noreferrer" style={{color:C.coral,textDecoration:'underline'}}>{rec.recallLink}</a>
             : '—'}/>
         </Section>
 
@@ -2586,8 +2583,8 @@ function RecallIntelligence(){
                       </td>
                       <td style={{padding:'9px 12px',fontSize:'11px',color:C.amber}}>{rel||''}</td>
                       <td style={{padding:'9px 12px'}}>
-                        {r.nhtsaId
-                          ? <a href={getNhtsaRecallUrl(r.nhtsaId)} target="_blank" rel="noopener noreferrer"
+                        {r.recallLink
+                          ? <a href={r.recallLink} target="_blank" rel="noopener noreferrer"
                               onClick={e=>e.stopPropagation()}
                               style={{color:C.coral,textDecoration:'underline',fontSize:'11.5px'}}>NHTSA →</a>
                           : '—'}
@@ -4225,6 +4222,8 @@ function StellantisWorkspace(){
 }
 
 
+// ══════════════════════════════════════════════════════════════
+
 
 // ══════════════════════════════════════════════════════════════════════════
 // WARRANTY MIS — OPERATIONS / IMPORT CENTER (Phase 2)
@@ -4479,6 +4478,1351 @@ function wmisImpMakeBatchId(){
 }
 
 const WMIS_IMPORT_PREVIEW_ROW_LIMIT = 100;
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// PACKAGE B1 — Profile-Aware Classification + Mapping Foundation.
+// Added on top of Package A. Does NOT alter WMIS_IMPORT_CANONICAL_FIELDS,
+// WMIS_IMPORT_NUMERIC_FIELDS, or WMIS_IMPORT_FIXED_VALUE_ALLOWED above, which
+// remain the legacy Campaign-shaped preview/validation/summary contract.
+// Package B1 classified profiles are NOT routed into that legacy contract.
+// This block introduces its own, separate, versioned registry.
+// ══════════════════════════════════════════════════════════════════════════
+
+// ---- Business Domain ------------------------------------------------------
+const WMIS_B1_DOMAIN_WARRANTY = 'WARRANTY';
+const WMIS_B1_DOMAIN_RECALL_RECOVERY = 'RECALL_RECOVERY';
+const WMIS_B1_BUSINESS_DOMAINS = [
+  { code: WMIS_B1_DOMAIN_WARRANTY,        label: 'Warranty Operations' },
+  { code: WMIS_B1_DOMAIN_RECALL_RECOVERY, label: 'Recall Recovery Operations' },
+];
+
+// ---- OEM -------------------------------------------------------------------
+const WMIS_B1_OEM_GM = 'GM';
+const WMIS_B1_OEM_STELLANTIS = 'STELLANTIS';
+const WMIS_B1_OEMS = [
+  { code: WMIS_B1_OEM_GM,         label: 'GM' },
+  { code: WMIS_B1_OEM_STELLANTIS, label: 'Stellantis' },
+];
+
+// ---- Match confidence -------------------------------------------------------
+const WMIS_B1_CONFIDENCE_STRONG  = 'STRONG_MATCH';
+const WMIS_B1_CONFIDENCE_PARTIAL = 'PARTIAL_MATCH';
+const WMIS_B1_CONFIDENCE_WEAK    = 'WEAK_MATCH';
+const WMIS_B1_CONFIDENCE_UNKNOWN = 'UNKNOWN_FORMAT';
+const WMIS_B1_CONFIDENCE_LABELS = {
+  [WMIS_B1_CONFIDENCE_STRONG]:  'Strong Match',
+  [WMIS_B1_CONFIDENCE_PARTIAL]: 'Partial Match',
+  [WMIS_B1_CONFIDENCE_WEAK]:    'Weak Match',
+  [WMIS_B1_CONFIDENCE_UNKNOWN]: 'Unknown Format',
+};
+
+// ---- Field requirement / level / mapping-mode vocabularies -----------------
+const WMIS_B1_REQUIREMENT = { REQUIRED:'REQUIRED', CONDITIONAL:'CONDITIONAL', OPTIONAL:'OPTIONAL', UNSUPPORTED:'UNSUPPORTED' };
+const WMIS_B1_LEVEL = { BATCH:'BATCH', ROW:'ROW' };
+const WMIS_B1_MODE = {
+  SOURCE_COLUMN: 'SOURCE_COLUMN',
+  FIXED_VALUE: 'FIXED_VALUE',
+  WORKBOOK_METADATA: 'WORKBOOK_METADATA',
+  OPERATOR_CLASSIFICATION: 'OPERATOR_CLASSIFICATION',
+  UNMAPPED: 'UNMAPPED',
+};
+
+const WMIS_B1_BETA_DISCLAIMER =
+  'Profile requirements are configured from the currently reviewed GM and ' +
+  'Stellantis document samples. They are beta workflow profiles, not an ' +
+  'enterprise-wide OEM data standard.';
+
+// ---- Document Family availability by Domain + OEM ---------------------------
+// Maps "DOMAIN|OEM" to the list of profileKeys selectable for that combination.
+// A combination absent from this map is an unsupported Domain/OEM pairing in
+// Package B1 (must show a beta limitation, never a fabricated family).
+const WMIS_B1_DOCUMENT_FAMILIES_BY_COMBO = {
+  [`${WMIS_B1_DOMAIN_WARRANTY}|${WMIS_B1_OEM_GM}`]: [
+    'GM_WARRANTY_BILL_DETAIL_V1',
+    'GM_COMPONENT_LOT_VIN_LIST_V1',
+    'GM_UNKNOWN_MANUAL_V1',
+  ],
+  [`${WMIS_B1_DOMAIN_RECALL_RECOVERY}|${WMIS_B1_OEM_STELLANTIS}`]: [
+    'STELLANTIS_CASE_DEBIT_SUMMARY_V1',
+    'STELLANTIS_UNKNOWN_MANUAL_V1',
+  ],
+};
+
+// ---- Minimal shared core fields (name/shape shared only, not business meaning) ----
+const WMIS_B1_SHARED_CORE_FIELDS = [
+  { canonicalKey:'source_file_name', businessLabel:'Source File Name', level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA] },
+  { canonicalKey:'source_worksheet', businessLabel:'Source Worksheet', level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA] },
+  { canonicalKey:'source_row_number', businessLabel:'Source Row Number', level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA] },
+  { canonicalKey:'business_domain', businessLabel:'Business Domain', level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.OPERATOR_CLASSIFICATION] },
+  { canonicalKey:'oem_code', businessLabel:'OEM', level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.OPERATOR_CLASSIFICATION] },
+  { canonicalKey:'import_profile_key', businessLabel:'Import Profile Key', level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.OPERATOR_CLASSIFICATION] },
+  { canonicalKey:'import_profile_version', businessLabel:'Import Profile Version', level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.OPERATOR_CLASSIFICATION] },
+];
+
+// vin / repair_date are shared optional semantic fields whose identity and
+// business interpretation remain profile-specific (see field entries below);
+// they are intentionally NOT declared as one universal field definition here.
+
+// ---- GM WARRANTY BILL DETAIL PROFILE ---------------------------------------
+const WMIS_B1_PROFILE_GM_WARRANTY_BILL_DETAIL = {
+  profileKey: 'GM_WARRANTY_BILL_DETAIL_V1',
+  profileVersion: '1.0',
+  businessDomain: WMIS_B1_DOMAIN_WARRANTY,
+  oemCode: WMIS_B1_OEM_GM,
+  documentFamily: 'GM Warranty Bill Detail',
+  operatorFacingName: 'GM Warranty Bill Detail',
+  betaStatus: 'BETA',
+  betaDisclaimer: WMIS_B1_BETA_DISCLAIMER,
+  matchIndicators: {
+    worksheetNameHints: ['Report'],
+    strongHeaderSet: ['Billing Number','Transaction Number','Transaction Id','Warranty ID Number','VIN','Total Cost (USD)'],
+    filenamePattern: /^GM\s?\d{6}/i,
+  },
+  batchContextFields: [
+    { canonicalKey:'billing_number', businessLabel:'Billing Number', sourceLabel:'Billing Number', description:'Authoritative billing identifier from the workbook column. The filename six-digit value is a supporting cross-check only; mismatch validation is deferred to Package C.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.REQUIRED, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN, WMIS_B1_MODE.WORKBOOK_METADATA], safeAliases:['Billing Number'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'bill_status', businessLabel:'Bill Status', sourceLabel:'Bill Status', description:'Workbook-reported bill status.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Bill Status'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'lbe_status', businessLabel:'LBE Status', sourceLabel:'LBE Status', description:'Workbook-reported LBE status.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'bill_currency_type', businessLabel:'Bill Currency Type', sourceLabel:'Bill Currency Type', description:'Currency type reported for the bill.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'statement_date', businessLabel:'Statement Date', sourceLabel:'Statement Date', description:'Workbook statement date.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'technical_factor_approval_date', businessLabel:'Technical Factor Approval Date', sourceLabel:'Technical Factor Approval Date', description:'Optional approval date.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+  ],
+  fieldRegistry: [
+    { canonicalKey:'source_transaction_number', businessLabel:'Transaction Number', sourceLabel:'Transaction Number', description:'Row-level source transaction identifier; best available duplicate-detection candidate (descriptive only in B1).', group:'Required', requirement: WMIS_B1_REQUIREMENT.REQUIRED, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Transaction Number'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'source_transaction_id', businessLabel:'Transaction Id', sourceLabel:'Transaction Id', description:'Distinct from Transaction Number; must not be merged with it.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Transaction Id'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'warranty_id_number', businessLabel:'Warranty ID Number', sourceLabel:'Warranty ID Number', description:'Grouping context field. Business meaning remains unresolved; not a primary identity and not a duplicate key.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Warranty ID Number'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'job_card_number', businessLabel:'Job Card', sourceLabel:'Job Card', description:'Dealer/repair job card reference.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Job Card'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'vin', businessLabel:'VIN', sourceLabel:'VIN', description:'Shared optional semantic field. Identity/duplicate role remains profile-specific; not a universal duplicate key.', group:'Conditional', requirement: WMIS_B1_REQUIREMENT.CONDITIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['VIN'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'repair_date', businessLabel:'Repair Date', sourceLabel:'Repair Date', description:'Shared optional semantic field with profile-specific business interpretation.', group:'Conditional', requirement: WMIS_B1_REQUIREMENT.CONDITIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Repair Date'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'dealer_code', businessLabel:'Repairing Dealer Code', sourceLabel:'Repairing Dealer Code', description:'Dealer code reference.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Repairing Dealer Code'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'dealer_name', businessLabel:'Repair Dealer Name', sourceLabel:'Repair Dealer Name', description:'Dealer name reference.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Repair Dealer Name'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'labor_cost', businessLabel:'Labor Cost (USD)', sourceLabel:'Labor Cost (USD)', description:'Core GM financial field. At-least-one-financial-field rule is descriptive only in B1 (not executed).', group:'Conditional', requirement: WMIS_B1_REQUIREMENT.CONDITIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Labor Cost (USD)'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'total_part_cost', businessLabel:'Total Part Cost (USD)', sourceLabel:'Total Part Cost (USD)', description:'Core GM financial field.', group:'Conditional', requirement: WMIS_B1_REQUIREMENT.CONDITIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Total Part Cost (USD)'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'total_cost', businessLabel:'Total Cost (USD)', sourceLabel:'Total Cost (USD)', description:'Core GM financial field.', group:'Conditional', requirement: WMIS_B1_REQUIREMENT.CONDITIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Total Cost (USD)'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'dealer_submitted_currency', businessLabel:'Dealer Submitted Currency', sourceLabel:'Dealer Submitted Currency', description:'Distinct currency concept from Bill Currency Type.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'billing_exchange_rate', businessLabel:'Billing Exchange Rate', sourceLabel:'Billing Exchange Rate', description:'Distinct currency concept from Bill Currency Type and Dealer Submitted Currency.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'warranty_description', businessLabel:'Warranty Description', sourceLabel:'Warranty Description', description:'Descriptive warranty text.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    // Additional GM Financial Fields (grouped, collapsed by default; not Required)
+    { canonicalKey:'base_labor_cost', businessLabel:'Base Labor Cost', sourceLabel:'Base Labor Cost', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'other_labor_cost', businessLabel:'Other Labor Cost', sourceLabel:'Other Labor Cost', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'supplemental_labor_cost', businessLabel:'Supplemental Labor Cost', sourceLabel:'Supplemental Labor Cost', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'diagnostic_labor_cost', businessLabel:'Diagnostic Labor Cost', sourceLabel:'Diagnostic Labor Cost', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'towing_cost', businessLabel:'Towing Cost', sourceLabel:'Towing Cost', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'alternate_transportation_cost', businessLabel:'Alternate Transportation Cost', sourceLabel:'Alternate Transportation Cost', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'miscellaneous_cost', businessLabel:'Miscellaneous Cost', sourceLabel:'Miscellaneous Cost', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'deductible_cost', businessLabel:'Deductible Cost', sourceLabel:'Deductible Cost', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'tax_cost', businessLabel:'Tax Cost', sourceLabel:'Tax Cost', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'owt_claim_total', businessLabel:'OWT Claim Total', sourceLabel:'OWT Claim Total', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'owt_adjusted_claim_total', businessLabel:'OWT Adjusted Claim Total', sourceLabel:'OWT Adjusted Claim Total', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'shareable_amount', businessLabel:'Shareable Amount', sourceLabel:'Shareable Amount', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'supplier_allocation_amount', businessLabel:'Supplier Allocation Amount', sourceLabel:'Supplier Allocation Amount', description:'Additional GM financial field.', group:'Additional GM Financial Fields', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+  ],
+  defaultPreviewFields: ['billing_number','source_transaction_number','vin','repair_date','labor_cost','total_part_cost','total_cost'],
+  unsupportedConcepts: ['campaign_number','swrs_code','source_debit_range_raw','occurrence'],
+  fallbackBehavior: 'UNKNOWN_MANUAL_GM',
+};
+
+// ---- GM COMPONENT LOT VIN LIST PROFILE (PROVISIONAL) -----------------------
+const WMIS_B1_PROFILE_GM_COMPONENT_LOT_VIN_LIST = {
+  profileKey: 'GM_COMPONENT_LOT_VIN_LIST_V1',
+  profileVersion: '1.0',
+  businessDomain: WMIS_B1_DOMAIN_WARRANTY,
+  oemCode: WMIS_B1_OEM_GM,
+  documentFamily: 'GM Component Lot VIN List',
+  operatorFacingName: 'GM Component Lot VIN List (Provisional)',
+  betaStatus: 'PROVISIONAL',
+  betaDisclaimer: WMIS_B1_BETA_DISCLAIMER + ' This provisional profile is a supporting component-traceability reference, not a Warranty Bill Detail file, and is not fully validated from a single sample.',
+  matchIndicators: {
+    worksheetNameHints: [],
+    strongHeaderSet: ['vin','Inflator LOT #','partNumber','manifestSection','producedDate(80)','shippedDate(90)'],
+    filenamePattern: /VIN.*list/i,
+  },
+  batchContextFields: [
+    { canonicalKey:'source_file_name', businessLabel:'Source File Name', sourceLabel:null, description:'Batch context.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+  ],
+  fieldRegistry: [
+    { canonicalKey:'vin', businessLabel:'VIN', sourceLabel:'vin', description:'Provisional profile requirement. VIN uniqueness is not guaranteed; no cross-file matching is implemented.', group:'Required', requirement: WMIS_B1_REQUIREMENT.REQUIRED, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['vin'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'inflator_lot_number', businessLabel:'Inflator LOT #', sourceLabel:'Inflator LOT #', description:'Provisional profile requirement.', group:'Required', requirement: WMIS_B1_REQUIREMENT.REQUIRED, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Inflator LOT #'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'component_part_number', businessLabel:'Component Part Number', sourceLabel:'partNumber', description:'Provisional profile requirement.', group:'Required', requirement: WMIS_B1_REQUIREMENT.REQUIRED, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['partNumber'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'vpps', businessLabel:'VPPS', sourceLabel:'vpps', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['vpps'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'manufacturer_duns', businessLabel:'Manufacturer DUNS', sourceLabel:'duns', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['duns'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'manufacturer_tin', businessLabel:'Manufacturer TIN', sourceLabel:'tin', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['tin'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'family_address', businessLabel:'Family Address', sourceLabel:'familyAddress', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['familyAddress'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'component_name', businessLabel:'Component Name', sourceLabel:'componentName', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['componentName'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'manifest_section', businessLabel:'Manifest Section', sourceLabel:'manifestSection', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['manifestSection'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'model_year', businessLabel:'Model Year', sourceLabel:'modelYear', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['modelYear'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'produced_date', businessLabel:'Produced Date', sourceLabel:'producedDate(80)', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['producedDate(80)'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'shipped_date', businessLabel:'Shipped Date', sourceLabel:'shippedDate(90)', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['shippedDate(90)'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'country_plant_line', businessLabel:'Country / Plant Line', sourceLabel:'countryPlantLine', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['countryPlantLine'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'plant_name', businessLabel:'Plant Name', sourceLabel:'plantName', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['plantName'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'site_code', businessLabel:'Site Code', sourceLabel:'siteCode', description:'Provisional field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['siteCode'], ambiguousAliases:[], sourcePreservation:true },
+  ],
+  defaultPreviewFields: ['vin','inflator_lot_number','component_part_number'],
+  unsupportedConcepts: ['billing_number','labor_cost','total_cost','campaign_number','occurrence'],
+  fallbackBehavior: 'UNKNOWN_MANUAL_GM',
+};
+
+// ---- STELLANTIS CASE DEBIT SUMMARY PROFILE ---------------------------------
+const WMIS_B1_PROFILE_STELLANTIS_CASE_DEBIT_SUMMARY = {
+  profileKey: 'STELLANTIS_CASE_DEBIT_SUMMARY_V1',
+  profileVersion: '1.0',
+  businessDomain: WMIS_B1_DOMAIN_RECALL_RECOVERY,
+  oemCode: WMIS_B1_OEM_STELLANTIS,
+  documentFamily: 'Stellantis Case Debit Summary',
+  operatorFacingName: 'Stellantis Case Debit Summary',
+  betaStatus: 'BETA',
+  betaDisclaimer: WMIS_B1_BETA_DISCLAIMER,
+  matchIndicators: {
+    worksheetNameHints: [],
+    metadataLabelHints: ['Case #','Debit #'],
+    strongHeaderSet: ['SWRS','SWRS#','Claim#','VIN#','Total LOP Expense','Total Part Expense'],
+    filenamePattern: /Case\s?\d{3,5}/i,
+  },
+  batchContextFields: [
+    { canonicalKey:'campaign_number', businessLabel:'Campaign Number', sourceLabel:'Case #', description:'Canonical business concept is Campaign Number; source-system label is Case Number (e.g. "Case #4750"). Same underlying value; not a global rename.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.REQUIRED, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA, WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Case #'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'source_debit_range_raw', businessLabel:'Debit Number Range', sourceLabel:'Debit #', description:'Raw range preserved exactly (e.g. "174308-174313"). Never expanded into individual Debit records; range parsing validation deferred.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.REQUIRED, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA], safeAliases:['Debit #'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'debit_amount_total', businessLabel:'Debit Amount (Total)', sourceLabel:'Debit amount', description:'Batch-level aggregate context, not a row record.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA], safeAliases:['Debit amount'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'parts_quantity_total', businessLabel:'Parts Quantity (Total)', sourceLabel:'Parts Qty', description:'Batch-level aggregate context.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA], safeAliases:['Parts Qty'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'cost_per_part', businessLabel:'Cost Per Part', sourceLabel:'Cost per part', description:'Batch-level aggregate context.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA], safeAliases:['Cost per part'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'claim_or_defect_description', businessLabel:'Claim / Defect Description', sourceLabel:'Claim:', description:'Batch-level descriptive context.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA], safeAliases:['Claim:'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'plant', businessLabel:'Plant', sourceLabel:'Plant', description:'Batch-level context.', group:'Batch Context', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.WORKBOOK_METADATA], safeAliases:['Plant'], ambiguousAliases:[], sourcePreservation:true },
+  ],
+  fieldRegistry: [
+    { canonicalKey:'swrs_code', businessLabel:'SWRS Code', sourceLabel:'SWRS#', description:'Row-level grouping key within the detail section.', group:'Required', requirement: WMIS_B1_REQUIREMENT.REQUIRED, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['SWRS','SWRS#'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'claim_number', businessLabel:'Claim Number', sourceLabel:'Claim#', description:'Row-level identity candidate.', group:'Required', requirement: WMIS_B1_REQUIREMENT.REQUIRED, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Claim#'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'vin', businessLabel:'VIN', sourceLabel:'VIN#', description:'Shared optional semantic field, evidenced in the Stellantis detail table. Identity/duplicate role remains profile-specific.', group:'Conditional', requirement: WMIS_B1_REQUIREMENT.CONDITIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['VIN#'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'repair_date', businessLabel:'Repair Date', sourceLabel:'Repair Date', description:'Shared optional semantic field, evidenced in the Stellantis detail table.', group:'Conditional', requirement: WMIS_B1_REQUIREMENT.CONDITIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Repair Date'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'model_year', businessLabel:'Model Year', sourceLabel:'Model Year', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'family_code', businessLabel:'Family Code', sourceLabel:'Family Code', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'failed_part', businessLabel:'Failed Part', sourceLabel:'Failed Part', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'other_parts', businessLabel:'Other Parts', sourceLabel:'Other Parts', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'quantity', businessLabel:'Quantity', sourceLabel:'Qty', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Qty'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'causal_lop', businessLabel:'Causal LOP', sourceLabel:'Causal LOP', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'other_lops', businessLabel:'Other LOPs', sourceLabel:'Other LOPs', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'total_lop_expense', businessLabel:'Total LOP Expense', sourceLabel:'Total LOP Expense', description:'Row financial field. Preserved without destructive rounding.', group:'Conditional', requirement: WMIS_B1_REQUIREMENT.CONDITIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Total LOP Expense'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'total_part_expense', businessLabel:'Total Part Expense', sourceLabel:'Total Part Expense', description:'Row financial field. Preserved without destructive rounding.', group:'Conditional', requirement: WMIS_B1_REQUIREMENT.CONDITIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Total Part Expense'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'claim_paid_month', businessLabel:'Claim Paid Month', sourceLabel:'Claim Paid Month', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'transaction_code', businessLabel:'Transaction Code', sourceLabel:'Transaction Code', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'odometer', businessLabel:'Odometer', sourceLabel:'Odometer', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'build_date_j', businessLabel:'Build Date (J)', sourceLabel:'Build Date(J)', description:'Must remain separate from Build Date (PLT); no automatic collapse.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'build_date_plant', businessLabel:'Build Date (PLT)', sourceLabel:'Build Date(PLT)', description:'Must remain separate from Build Date (J); no automatic collapse.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'market_code', businessLabel:'Market Code', sourceLabel:'Market Code', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'claim_paid_or_chargeback_date_raw', businessLabel:'Claim Paid / Chargeback Date (raw)', sourceLabel:'Claim Paid/Chargeback Date', description:'Row field, raw.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'days_in_service', businessLabel:'Days In Service', sourceLabel:'Days In Service', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'zone', businessLabel:'Zone', sourceLabel:'Zone', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'dealer', businessLabel:'Dealer', sourceLabel:'Dealer', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'model_code', businessLabel:'Model Code', sourceLabel:'Model Code', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'swrs_billing_cycle', businessLabel:'SWRS Billing Cycle', sourceLabel:'SWRS Billing Cycle', description:'Row field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:[], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'adjusted_part_expense', businessLabel:'Total Adj Part Expense ($)', sourceLabel:'Total Adj Part Expense($)', description:'Row financial field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Total Adj Part Expense($)'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'adjusted_lop_expense', businessLabel:'Total Adj LOP Expense ($)', sourceLabel:'Total Adj LOP Expense ($)', description:'Row financial field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Total Adj LOP Expense ($)'], ambiguousAliases:[], sourcePreservation:true },
+    { canonicalKey:'part_and_lop_total', businessLabel:'Sum Of Part and LOP', sourceLabel:'Sum Of Part and LOP', description:'Row financial field.', group:'Optional', requirement: WMIS_B1_REQUIREMENT.OPTIONAL, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.SOURCE_COLUMN], safeAliases:['Sum Of Part and LOP'], ambiguousAliases:[], sourcePreservation:true },
+    // Explicitly unsupported for this profile — collapsed under Unsupported / Not Applicable.
+    { canonicalKey:'occurrence', businessLabel:'Occurrence', sourceLabel:null, description:'Not evidenced in the workbook. Unsupported for this profile; the Occurrence concept elsewhere in the app is not removed.', group:'Unsupported / Not Applicable', requirement: WMIS_B1_REQUIREMENT.UNSUPPORTED, level: WMIS_B1_LEVEL.ROW, mappingModes:[WMIS_B1_MODE.UNMAPPED], safeAliases:[], ambiguousAliases:[], sourcePreservation:false },
+    { canonicalKey:'debit_status', businessLabel:'Debit Status', sourceLabel:null, description:'Absent from the workbook; dispute/credit/settlement status remains email/manual, outside Package B1.', group:'Unsupported / Not Applicable', requirement: WMIS_B1_REQUIREMENT.UNSUPPORTED, level: WMIS_B1_LEVEL.BATCH, mappingModes:[WMIS_B1_MODE.UNMAPPED], safeAliases:[], ambiguousAliases:[], sourcePreservation:false },
+  ],
+  nonRowSourceSections: ['header metadata','SWRS summary pivot','build-date pivot','market pivot','part-number pivot','repair-date pivot','detail table'],
+  defaultPreviewFields: ['campaign_number','swrs_code','claim_number','vin','repair_date','total_lop_expense','total_part_expense'],
+  unsupportedConcepts: ['occurrence','debit_status','billing_number','warranty_id_number'],
+  fallbackBehavior: 'UNKNOWN_MANUAL_STELLANTIS',
+};
+
+// ---- UNKNOWN / MANUAL PROFILES ---------------------------------------------
+const WMIS_B1_PROFILE_GM_UNKNOWN = {
+  profileKey: 'GM_UNKNOWN_MANUAL_V1',
+  profileVersion: '1.0',
+  businessDomain: WMIS_B1_DOMAIN_WARRANTY,
+  oemCode: WMIS_B1_OEM_GM,
+  documentFamily: 'Unknown / Manual GM Format',
+  operatorFacingName: 'Unknown / Manual GM Format',
+  betaStatus: 'BETA',
+  betaDisclaimer: WMIS_B1_BETA_DISCLAIMER + ' No known-profile required-field set is applied; manual Source Column mapping only.',
+  matchIndicators: { worksheetNameHints: [], strongHeaderSet: [], filenamePattern: null },
+  batchContextFields: [],
+  fieldRegistry: [],
+  defaultPreviewFields: [],
+  unsupportedConcepts: [],
+  fallbackBehavior: null,
+};
+const WMIS_B1_PROFILE_STELLANTIS_UNKNOWN = {
+  profileKey: 'STELLANTIS_UNKNOWN_MANUAL_V1',
+  profileVersion: '1.0',
+  businessDomain: WMIS_B1_DOMAIN_RECALL_RECOVERY,
+  oemCode: WMIS_B1_OEM_STELLANTIS,
+  documentFamily: 'Unknown / Manual Stellantis Format',
+  operatorFacingName: 'Unknown / Manual Stellantis Format',
+  betaStatus: 'BETA',
+  betaDisclaimer: WMIS_B1_BETA_DISCLAIMER + ' No known-profile required-field set is applied; manual Source Column mapping only.',
+  matchIndicators: { worksheetNameHints: [], strongHeaderSet: [], filenamePattern: null },
+  batchContextFields: [],
+  fieldRegistry: [],
+  defaultPreviewFields: [],
+  unsupportedConcepts: [],
+  fallbackBehavior: null,
+};
+
+// ---- Profile registry lookup ------------------------------------------------
+const WMIS_B1_PROFILE_REGISTRY = {
+  GM_WARRANTY_BILL_DETAIL_V1: WMIS_B1_PROFILE_GM_WARRANTY_BILL_DETAIL,
+  GM_COMPONENT_LOT_VIN_LIST_V1: WMIS_B1_PROFILE_GM_COMPONENT_LOT_VIN_LIST,
+  GM_UNKNOWN_MANUAL_V1: WMIS_B1_PROFILE_GM_UNKNOWN,
+  STELLANTIS_CASE_DEBIT_SUMMARY_V1: WMIS_B1_PROFILE_STELLANTIS_CASE_DEBIT_SUMMARY,
+  STELLANTIS_UNKNOWN_MANUAL_V1: WMIS_B1_PROFILE_STELLANTIS_UNKNOWN,
+};
+
+function wmisB1GetDocumentFamilyOptions(domainCode, oemCode){
+  const key = `${domainCode}|${oemCode}`;
+  const keys = WMIS_B1_DOCUMENT_FAMILIES_BY_COMBO[key];
+  if(!keys) return null; // unsupported combination
+  return keys.map(k=>WMIS_B1_PROFILE_REGISTRY[k]);
+}
+
+function wmisB1IsSupportedCombo(domainCode, oemCode){
+  return Boolean(WMIS_B1_DOCUMENT_FAMILIES_BY_COMBO[`${domainCode}|${oemCode}`]);
+}
+
+// Pass 4 — profile-aware effective field selection. Pure/derived from the
+// confirmed profile's own registry only; never mutates the profile registry,
+// never touches WMIS_IMPORT_CANONICAL_FIELDS, and never feeds the legacy
+// Campaign-shaped preview. Returns fields grouped by declared group label
+// (Required / Conditional / Optional / Additional / Unsupported / Batch
+// Context) in registry order, each carrying its own dual source/business
+// labels and level (BATCH vs ROW) for batch-context presentation.
+function wmisB1GetEffectiveFields(profileKey){
+  const profile = WMIS_B1_PROFILE_REGISTRY[profileKey];
+  if(!profile) return { batchContextFields: [], rowFields: [], groups: [] };
+  const batchContextFields = profile.batchContextFields || [];
+  const rowFields = profile.fieldRegistry || [];
+  const groupOrder = [];
+  const seen = new Set();
+  [...batchContextFields, ...rowFields].forEach(f=>{
+    if(f.group && !seen.has(f.group)){ seen.add(f.group); groupOrder.push(f.group); }
+  });
+  const groups = groupOrder.map(g=>({
+    group: g,
+    fields: [...batchContextFields, ...rowFields].filter(f=>f.group===g),
+  }));
+  return { batchContextFields, rowFields, groups };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// PACKAGE B2 — Pass 2: mapping-value resolution, provenance resolution,
+// preview-column configuration, and batch-context resolution.
+// Pure helper functions only. LOCAL PREVIEW — NOT PERSISTED. Do not call
+// from render yet (Stage 5 / UI activation is a later controlled pass).
+// ══════════════════════════════════════════════════════════════════════════
+
+// Resolves the display value for a WORKBOOK_METADATA field from local,
+// already-known workbook context. Never reads from network or storage.
+function wmisB2ResolveWorkbookMetadataValue(canonicalKey, workbookCtx){
+  const ctx = workbookCtx || {};
+  switch(canonicalKey){
+    case 'source_file_name':  return ctx.fileName || '';
+    case 'source_worksheet':  return ctx.selectedSheet || '';
+    default: return '';
+  }
+}
+
+// Determines a single field's mapping provenance: WORKBOOK_METADATA (auto),
+// SOURCE_COLUMN (operator-mapped to a workbook header), or UNMAPPED.
+// Never mutates b1Mapping. Carries both the source-facing and business-
+// facing labels so callers can render the dual source/business labeling
+// required by Package B1/B2 without re-deriving it.
+// classificationCtx (optional) carries the already-confirmed B1 classification
+// / profile context so OPERATOR_CLASSIFICATION and CONFIRMED_PROFILE_CONTEXT
+// fields (business_domain, oem_code, import_profile_key,
+// import_profile_version) can resolve from explicit operator state rather
+// than from workbook rows. workbookCtx (optional) carries only deterministic,
+// already-extracted local workbook metadata (e.g. selected sheet name); it is
+// never fabricated here and never derived from a filename heuristic.
+const WMIS_B2_CLASSIFICATION_FIELD_MODE = {
+  business_domain:          'OPERATOR_CLASSIFICATION',
+  oem_code:                 'OPERATOR_CLASSIFICATION',
+  import_profile_key:       'CONFIRMED_PROFILE_CONTEXT',
+  import_profile_version:   'CONFIRMED_PROFILE_CONTEXT',
+};
+
+function wmisB2ResolveFieldProvenance(field, mappingObj, workbookCtx, classificationCtx){
+  if(!field){
+    return { mode:'UNMAPPED', sourceColumn:null, businessLabel:'', sourceLabel:'' };
+  }
+  const classificationMode = WMIS_B2_CLASSIFICATION_FIELD_MODE[field.canonicalKey];
+  if(classificationMode){
+    return { mode:classificationMode, sourceColumn:null, businessLabel:field.businessLabel||'', sourceLabel:field.sourceLabel||'' };
+  }
+  const allowsSourceColumn = field.mappingModes?.includes(WMIS_B1_MODE.SOURCE_COLUMN);
+  const allowsWorkbookMetadata = field.mappingModes?.includes(WMIS_B1_MODE.WORKBOOK_METADATA);
+  const mappedHeader = mappingObj ? mappingObj[field.canonicalKey] : undefined;
+  // Precedence 1: an explicit Source Column mapping always wins, including
+  // for hybrid fields (e.g. GM billing_number, Stellantis campaign_number)
+  // that also allow WORKBOOK_METADATA.
+  if(allowsSourceColumn && mappedHeader){
+    return { mode:'SOURCE_COLUMN', sourceColumn:mappedHeader, businessLabel:field.businessLabel||'', sourceLabel:field.sourceLabel||'' };
+  }
+  // Precedence 2: fall back to workbook metadata only when a deterministic
+  // extracted value is actually present in the supplied workbook context.
+  // Never manufacture this value (e.g. never treat a filename as an
+  // authoritative Billing Number; never claim a Case # is resolved without
+  // an actual extracted value).
+  if(allowsWorkbookMetadata){
+    const metaValue = wmisB2ResolveWorkbookMetadataValue(field.canonicalKey, workbookCtx);
+    if(metaValue){
+      return { mode:'WORKBOOK_METADATA', sourceColumn:null, businessLabel:field.businessLabel||'', sourceLabel:field.sourceLabel||'' };
+    }
+  }
+  // Precedence 3: nothing deterministic is available.
+  if(allowsSourceColumn || allowsWorkbookMetadata){
+    return { mode:'UNRESOLVED', sourceColumn:null, businessLabel:field.businessLabel||'', sourceLabel:field.sourceLabel||'' };
+  }
+  return { mode:'UNMAPPED', sourceColumn:null, businessLabel:field.businessLabel||'', sourceLabel:field.sourceLabel||'' };
+}
+
+// Resolves the actual display value for one field on one source row (or the
+// batch context), given its already-resolved provenance. Returns '' rather
+// than throwing when data is missing so a single bad row cannot break the
+// whole preview.
+function wmisB2ResolveFieldValue(field, provenance, rowObj, workbookCtx, classificationCtx){
+  if(!field || !provenance) return '';
+  if(provenance.mode==='WORKBOOK_METADATA'){
+    return wmisB2ResolveWorkbookMetadataValue(field.canonicalKey, workbookCtx);
+  }
+  if(provenance.mode==='OPERATOR_CLASSIFICATION' || provenance.mode==='CONFIRMED_PROFILE_CONTEXT'){
+    const cls = classificationCtx || {};
+    switch(field.canonicalKey){
+      case 'business_domain':        return cls.businessDomain || '';
+      case 'oem_code':               return cls.oemCode || '';
+      case 'import_profile_key':     return cls.profileKey || '';
+      case 'import_profile_version': return cls.profileVersion || '';
+      default: return '';
+    }
+  }
+  if(provenance.mode==='SOURCE_COLUMN' && rowObj){
+    const v = rowObj[provenance.sourceColumn];
+    return (v===undefined || v===null) ? '' : v;
+  }
+  return '';
+}
+
+// Builds the resolved batch-context row (Plant/Case/Debit-style batch-level
+// fields) for the confirmed profile, using only the first available source
+// row as the batch sample plus workbook metadata and the already-confirmed
+// classification/profile context. Read-only; does not mutate any mapping or
+// workbook state, and does not persist classificationCtx anywhere.
+function wmisB2ResolveBatchContext(profileKey, mappingObj, workbookCtx, rawRowsArr, classificationCtx){
+  const { batchContextFields } = wmisB1GetEffectiveFields(profileKey);
+  const sampleRow = (Array.isArray(rawRowsArr) && rawRowsArr.length>0) ? rawRowsArr[0] : null;
+  return batchContextFields.map(field=>{
+    const provenance = wmisB2ResolveFieldProvenance(field, mappingObj, workbookCtx, classificationCtx);
+    const value = wmisB2ResolveFieldValue(field, provenance, sampleRow, workbookCtx, classificationCtx);
+    return {
+      canonicalKey: field.canonicalKey,
+      businessLabel: field.businessLabel || '',
+      sourceLabel: field.sourceLabel || '',
+      mode: provenance.mode,
+      sourceColumn: provenance.sourceColumn,
+      value,
+    };
+  });
+}
+
+// Appends the shared classification/profile context entries (Business
+// Domain, OEM, Import Profile Key, Import Profile Version) to a batch
+// context array built by wmisB2ResolveBatchContext. These values resolve
+// only from the explicit classificationCtx argument (never workbook rows)
+// and are not part of any profile's own batchContextFields array, so they
+// are appended here as explicit, honestly-labeled additional entries. When
+// a value is blank it is preserved as unresolved rather than manufactured.
+// Does not mutate WMIS_B1_SHARED_CORE_FIELDS or any profile registry entry.
+function wmisB2AppendSharedClassificationContext(batchContextArr, classificationCtx){
+  const ctx = classificationCtx || {};
+  const entries = [
+    { canonicalKey:'business_domain', businessLabel:'Business Domain', mode:'OPERATOR_CLASSIFICATION', value: ctx.businessDomain || '' },
+    { canonicalKey:'oem_code', businessLabel:'OEM', mode:'OPERATOR_CLASSIFICATION', value: ctx.oemCode || '' },
+    { canonicalKey:'import_profile_key', businessLabel:'Import Profile Key', mode:'CONFIRMED_PROFILE_CONTEXT', value: ctx.profileKey || '' },
+    { canonicalKey:'import_profile_version', businessLabel:'Import Profile Version', mode:'CONFIRMED_PROFILE_CONTEXT', value: ctx.profileVersion || '' },
+  ];
+  const existingKeys = new Set((batchContextArr || []).map(e=>e.canonicalKey));
+  const additions = entries.filter(e=>!existingKeys.has(e.canonicalKey));
+  return [...(batchContextArr || []), ...additions];
+}
+
+// Builds the row-level preview column configuration (not the row values
+// themselves) for the confirmed profile: which canonical fields appear, in
+// what group, with which provenance. Column order is driven by the
+// confirmed profile's own defaultPreviewFields contract (not the legacy
+// Campaign-shaped WMIS_IMPORT_CANONICAL_FIELDS list): defaultPreviewFields
+// entries come first in that exact order, remaining mapped row fields follow
+// in registry order. Batch-level fields and UNSUPPORTED fields are always
+// excluded from the row table. Row-value materialization for a specific
+// profile (GM / Stellantis) is implemented in a later pass.
+function wmisB2BuildPreviewColumnConfig(profileKey, mappingObj){
+  const profile = WMIS_B1_PROFILE_REGISTRY[profileKey];
+  const { rowFields } = wmisB1GetEffectiveFields(profileKey);
+  const eligibleFields = rowFields.filter(field=>
+    field.level !== WMIS_B1_LEVEL.BATCH
+    && field.requirement !== WMIS_B1_REQUIREMENT.UNSUPPORTED
+  );
+  const defaultOrder = (profile && Array.isArray(profile.defaultPreviewFields)) ? profile.defaultPreviewFields : [];
+  const byKey = new Map(eligibleFields.map(f=>[f.canonicalKey, f]));
+  // A row field is treated as mapped, for Package B2 column-inclusion
+  // purposes, only when an explicit non-empty Source Column mapping string
+  // exists in mappingObj. defaultPreviewFields controls ORDER only; it must
+  // never be treated as evidence that a field is mapped.
+  const isMappedField = (f)=>{
+    const raw = mappingObj ? mappingObj[f.canonicalKey] : undefined;
+    return typeof raw === 'string' && raw.trim().length > 0;
+  };
+  // 1. Mapped fields listed in profile.defaultPreviewFields, in declared order.
+  const defaultKeys = defaultOrder.filter(k=>{
+    const f = byKey.get(k);
+    return f && isMappedField(f);
+  });
+  const defaultKeySet = new Set(defaultKeys);
+  // 2. Remaining mapped eligible row fields, in registry order. Unmapped
+  // Required, Conditional, or Optional fields never become empty columns.
+  const remainingKeys = eligibleFields
+    .filter(f=>!defaultKeySet.has(f.canonicalKey))
+    .filter(f=>isMappedField(f))
+    .map(f=>f.canonicalKey);
+  const orderedKeys = [...defaultKeys, ...remainingKeys];
+  return orderedKeys.map(k=>{
+    const field = byKey.get(k);
+    const provenance = wmisB2ResolveFieldProvenance(field, mappingObj);
+    return {
+      canonicalKey: field.canonicalKey,
+      businessLabel: field.businessLabel || '',
+      sourceLabel: field.sourceLabel || '',
+      group: field.group,
+      level: field.level,
+      mode: provenance.mode,
+      sourceColumn: provenance.sourceColumn,
+    };
+  });
+}
+
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// PACKAGE B2 — Pass 3: mapped-preview result contract, row materialization,
+// numeric display safety, GM Warranty Bill Detail / GM Component Lot VIN
+// List result builders, empty/limitation states, and the profile-aware
+// preview factory. Pure helper functions only. LOCAL PREVIEW — NOT
+// PERSISTED. Do not call from render yet; Stage 5 / UI activation and the
+// Package B1 checkpoint replacement remain a later controlled pass.
+// ══════════════════════════════════════════════════════════════════════════
+
+// ---- Result availability / limitation vocabulary ---------------------------
+const WMIS_B2_AVAILABILITY = { AVAILABLE:'AVAILABLE', UNAVAILABLE:'UNAVAILABLE', LIMITED:'LIMITED', PENDING:'PENDING' };
+const WMIS_B2_LIMITATION = {
+  NONE: null,
+  NO_PROFILE_FIELDS_MAPPED: 'NO_PROFILE_FIELDS_MAPPED',
+  NO_SOURCE_ROWS: 'NO_SOURCE_ROWS',
+  NO_CONFIRMED_PROFILE: 'NO_CONFIRMED_PROFILE',
+  MANUAL_PROFILE_NO_MAPPING: 'MANUAL_PROFILE_NO_MAPPING',
+  UNSUPPORTED_PROFILE: 'UNSUPPORTED_PROFILE',
+  PENDING_LATER_PASS: 'PENDING_LATER_PASS',
+  DETAIL_HEADER_NOT_FOUND: 'DETAIL_HEADER_NOT_FOUND',
+  AMBIGUOUS_DETAIL_HEADER: 'AMBIGUOUS_DETAIL_HEADER',
+  DUPLICATE_MAPPED_DETAIL_HEADER: 'DUPLICATE_MAPPED_DETAIL_HEADER',
+  REQUIRED_BATCH_METADATA_MISSING: 'REQUIRED_BATCH_METADATA_MISSING',
+  METADATA_CONFLICT: 'METADATA_CONFLICT',
+  NO_DETAIL_ROWS: 'NO_DETAIL_ROWS',
+  DETAIL_STRUCTURE_REQUIRES_CONFIRMATION: 'DETAIL_STRUCTURE_REQUIRES_CONFIRMATION',
+};
+
+// Builds one safe, empty-by-default Package B2 mapped-preview result shell.
+// Every field builder below returns an object built on this shape so callers
+// (future UI passes) can rely on a single, predictable contract regardless
+// of which profile or limitation path produced it. Never implies an import
+// occurred; "Not persisted" is always true for this local preview layer.
+function wmisB2CreateEmptyPreviewResult(overrides){
+  return Object.assign({
+    profileKey: null,
+    profileVersion: null,
+    operatorFacingName: '',
+    betaStatus: null,
+    columns: [],
+    rows: [],
+    batchContext: [],
+    totalSourceRows: 0,
+    displayedRowCount: 0,
+    truncated: false,
+    availability: WMIS_B2_AVAILABILITY.UNAVAILABLE,
+    limitationCode: WMIS_B2_LIMITATION.NONE,
+    limitationMessage: '',
+    notices: [],
+    sourceStructure: { requiresConfirmation:false, note:'' },
+    generatedFromCurrentState: true,
+    notPersisted: true,
+  }, overrides || {});
+}
+
+// ---- Numeric display safety -------------------------------------------------
+// Conservative, profile-specific numeric-field sets for VISUAL formatting
+// only. Never used to coerce, round, or overwrite rawValue. GM Component Lot
+// fields are intentionally absent: they are traceability fields, not
+// financial fields, and must never receive currency-style display treatment.
+const WMIS_B2_NUMERIC_FIELDS_BY_PROFILE = {
+  GM_WARRANTY_BILL_DETAIL_V1: new Set([
+    'labor_cost','total_part_cost','total_cost','billing_exchange_rate',
+    'base_labor_cost','other_labor_cost','supplemental_labor_cost','diagnostic_labor_cost',
+    'towing_cost','alternate_transportation_cost','miscellaneous_cost','deductible_cost',
+    'tax_cost','owt_claim_total','owt_adjusted_claim_total','shareable_amount','supplier_allocation_amount',
+  ]),
+  STELLANTIS_CASE_DEBIT_SUMMARY_V1: new Set([
+    'quantity','total_lop_expense','total_part_expense','odometer','days_in_service',
+    'adjusted_part_expense','adjusted_lop_expense','part_and_lop_total',
+  ]),
+};
+
+// Returns a display-only representation of a numeric-eligible field's raw
+// value. Blank stays blank, zero stays visibly "0", non-numeric source text
+// is returned unchanged (never coerced), commas are stripped only to detect
+// numeric-ness for display, and up to five decimal places are preserved.
+// rawValue itself is never mutated by the caller; this function only ever
+// returns a new display string.
+function wmisB2FormatNumericDisplayValue(profileKey, canonicalKey, rawValue){
+  const isNumericField = Boolean(WMIS_B2_NUMERIC_FIELDS_BY_PROFILE[profileKey]?.has(canonicalKey));
+  if(!isNumericField) return rawValue;
+  if(rawValue===undefined || rawValue===null || rawValue==='') return '';
+  if(typeof rawValue==='number'){
+    if(rawValue===0) return '0';
+    return String(Math.round(rawValue*100000)/100000);
+  }
+  const asString = String(rawValue).trim();
+  if(asString==='') return '';
+  const stripped = asString.replace(/,/g,'');
+  if(stripped==='' || isNaN(Number(stripped))) return asString; // non-numeric source text, preserved verbatim
+  const num = Number(stripped);
+  if(num===0) return '0';
+  return String(Math.round(num*100000)/100000);
+}
+
+// ---- Row materialization -----------------------------------------------------
+// Materializes up to 100 mapped-preview rows from rawRowsArr using the
+// already-built column configuration. Pure: never mutates rawRowsArr, never
+// mutates any workbook object, and never injects batch-context values into a
+// row. Blanks remain blank, zero remains zero, uncertain date text is passed
+// through unchanged, and numeric values are never destructively rounded in
+// the retained rawValue (only displayValue may apply the conservative
+// numeric-display helper above).
+const WMIS_B2_MAX_PREVIEW_ROWS = 100;
+
+function wmisB2MaterializeMappedRows(profileKey, columnConfig, mappingObj, rawRowsArr, workbookCtx, classificationCtx){
+  const rows = Array.isArray(rawRowsArr) ? rawRowsArr : [];
+  const limit = Math.min(rows.length, WMIS_B2_MAX_PREVIEW_ROWS);
+  const materialized = [];
+  for(let i=0;i<limit;i++){
+    const sourceRow = rows[i];
+    const cells = {};
+    columnConfig.forEach(col=>{
+      const field = { canonicalKey: col.canonicalKey, businessLabel: col.businessLabel, sourceLabel: col.sourceLabel, mappingModes: undefined };
+      // Re-resolve provenance against this profile's actual field definition
+      // so mode/sourceColumn stay authoritative per-row (mapping does not
+      // change per row, but this keeps the contract self-contained per cell).
+      const provenance = { mode: col.mode, sourceColumn: col.sourceColumn };
+      const rawValue = wmisB2ResolveFieldValue(
+        { canonicalKey: col.canonicalKey },
+        provenance,
+        sourceRow,
+        workbookCtx,
+        classificationCtx
+      );
+      const displayValue = wmisB2FormatNumericDisplayValue(profileKey, col.canonicalKey, rawValue);
+      cells[col.canonicalKey] = {
+        canonicalKey: col.canonicalKey,
+        rawValue,
+        displayValue,
+        mode: col.mode,
+        sourceColumn: col.sourceColumn || undefined,
+        businessLabel: col.businessLabel,
+        sourceLabel: col.sourceLabel,
+      };
+    });
+    materialized.push({ sourceRowNumber: i+2, cells }); // first rawRows entry corresponds to worksheet row 2 (row 1 is the header)
+  }
+  return {
+    rows: materialized,
+    totalSourceRows: rows.length,
+    displayedRowCount: materialized.length,
+    truncated: rows.length > WMIS_B2_MAX_PREVIEW_ROWS,
+  };
+}
+
+// ---- GM Warranty Bill Detail mapped preview ---------------------------------
+// Built solely from the current uploaded workbook's rawRows, the confirmed
+// B1 profile registry entry, and the operator's own mapping. Never reads GM
+// Workspace synthetic fixture data (GM_FIELD_KEYS / GM_CLAIMS / GM_BILLS_SEED
+// or any embedded demo record).
+function wmisB2BuildGmWarrantyBillDetailPreview(mappingObj, rawRowsArr, workbookCtx, classificationCtx){
+  const profileKey = 'GM_WARRANTY_BILL_DETAIL_V1';
+  const profile = WMIS_B1_PROFILE_REGISTRY[profileKey];
+  const rows = Array.isArray(rawRowsArr) ? rawRowsArr : [];
+  if(rows.length===0){
+    return wmisB2CreateEmptyPreviewResult({
+      profileKey, profileVersion: profile.profileVersion, operatorFacingName: profile.operatorFacingName, betaStatus: profile.betaStatus,
+      availability: WMIS_B2_AVAILABILITY.UNAVAILABLE,
+      limitationCode: WMIS_B2_LIMITATION.NO_SOURCE_ROWS,
+      limitationMessage: 'The selected worksheet contains no source rows.',
+      notices: ['Original source remains available.'],
+    });
+  }
+  const columnConfig = wmisB2BuildPreviewColumnConfig(profileKey, mappingObj);
+  if(columnConfig.length===0){
+    return wmisB2CreateEmptyPreviewResult({
+      profileKey, profileVersion: profile.profileVersion, operatorFacingName: profile.operatorFacingName, betaStatus: profile.betaStatus,
+      availability: WMIS_B2_AVAILABILITY.LIMITED,
+      limitationCode: WMIS_B2_LIMITATION.NO_PROFILE_FIELDS_MAPPED,
+      limitationMessage: 'No profile fields have been mapped.',
+      notices: ['Original Source Preview remains available in a later pass.'],
+      totalSourceRows: rows.length,
+    });
+  }
+  const batchContext = wmisB2AppendSharedClassificationContext(
+    wmisB2ResolveBatchContext(profileKey, mappingObj, workbookCtx, rows, classificationCtx),
+    classificationCtx
+  );
+  const { rows: materializedRows, totalSourceRows, displayedRowCount, truncated } =
+    wmisB2MaterializeMappedRows(profileKey, columnConfig, mappingObj, rows, workbookCtx, classificationCtx);
+  const notices = ['Preview available.', 'Not persisted.'];
+  if(columnConfig.some(c=>c.canonicalKey==='warranty_id_number')){
+    notices.push('Groups related GM warranty transactions; exact organizational meaning remains unconfirmed.');
+  }
+  notices.push('Supporting filename reference is informational only and does not populate Billing Number.');
+  return wmisB2CreateEmptyPreviewResult({
+    profileKey, profileVersion: profile.profileVersion, operatorFacingName: profile.operatorFacingName, betaStatus: profile.betaStatus,
+    columns: columnConfig,
+    rows: materializedRows,
+    batchContext,
+    totalSourceRows, displayedRowCount, truncated,
+    availability: WMIS_B2_AVAILABILITY.AVAILABLE,
+    limitationCode: WMIS_B2_LIMITATION.NONE,
+    limitationMessage: '',
+    notices,
+    sourceStructure: { requiresConfirmation:false, note:'' },
+  });
+}
+
+// ---- GM Component Lot VIN List mapped preview (provisional) ----------------
+function wmisB2BuildGmComponentLotVinListPreview(mappingObj, rawRowsArr, workbookCtx, classificationCtx){
+  const profileKey = 'GM_COMPONENT_LOT_VIN_LIST_V1';
+  const profile = WMIS_B1_PROFILE_REGISTRY[profileKey];
+  const rows = Array.isArray(rawRowsArr) ? rawRowsArr : [];
+  const provisionalNotice = 'PROVISIONAL PROFILE: this supporting component-traceability profile is not fully validated from one sample.';
+  if(rows.length===0){
+    return wmisB2CreateEmptyPreviewResult({
+      profileKey, profileVersion: profile.profileVersion, operatorFacingName: profile.operatorFacingName, betaStatus: profile.betaStatus,
+      availability: WMIS_B2_AVAILABILITY.UNAVAILABLE,
+      limitationCode: WMIS_B2_LIMITATION.NO_SOURCE_ROWS,
+      limitationMessage: 'The selected worksheet contains no source rows.',
+      notices: [provisionalNotice, 'Original source remains available.'],
+    });
+  }
+  const columnConfig = wmisB2BuildPreviewColumnConfig(profileKey, mappingObj);
+  if(columnConfig.length===0){
+    return wmisB2CreateEmptyPreviewResult({
+      profileKey, profileVersion: profile.profileVersion, operatorFacingName: profile.operatorFacingName, betaStatus: profile.betaStatus,
+      availability: WMIS_B2_AVAILABILITY.LIMITED,
+      limitationCode: WMIS_B2_LIMITATION.NO_PROFILE_FIELDS_MAPPED,
+      limitationMessage: 'No profile fields have been mapped.',
+      notices: [provisionalNotice, 'Original Source Preview remains available in a later pass.'],
+      totalSourceRows: rows.length,
+    });
+  }
+  const batchContext = wmisB2AppendSharedClassificationContext(
+    wmisB2ResolveBatchContext(profileKey, mappingObj, workbookCtx, rows, classificationCtx),
+    classificationCtx
+  );
+  const { rows: materializedRows, totalSourceRows, displayedRowCount, truncated } =
+    wmisB2MaterializeMappedRows(profileKey, columnConfig, mappingObj, rows, workbookCtx, classificationCtx);
+  return wmisB2CreateEmptyPreviewResult({
+    profileKey, profileVersion: profile.profileVersion, operatorFacingName: profile.operatorFacingName, betaStatus: profile.betaStatus,
+    columns: columnConfig,
+    rows: materializedRows,
+    batchContext,
+    totalSourceRows, displayedRowCount, truncated,
+    availability: WMIS_B2_AVAILABILITY.AVAILABLE,
+    limitationCode: WMIS_B2_LIMITATION.NONE,
+    limitationMessage: '',
+    notices: [provisionalNotice, 'Preview available.', 'Not persisted.', 'No VIN validation, uniqueness claim, or cross-file matching is performed.'],
+    sourceStructure: { requiresConfirmation:false, note:'' },
+  });
+}
+
+// ---- Stellantis Case Debit Summary — Pass 4 v1.1 structural support -------
+// Structural matching is deliberately conservative. Normalized text is used
+// only to compare labels and headers; every original worksheet value remains
+// unchanged in the matrix and in preview-cell rawValue.
+function wmisB2NormalizeStructuralCell(value){
+  return String(value===null||value===undefined?'':value)
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g,' ')
+    .replace(/:\s*$/,'');
+}
+const WMIS_B2_STELLANTIS_EXPENSE_HEADERS = new Set([
+  'total lop expense','total part expense','total adj part expense($)',
+  'total adj lop expense ($)','sum of part and lop',
+]);
+function wmisB2StellantisFindDetailHeader(matrix){
+  const candidates = [];
+  (Array.isArray(matrix)?matrix:[]).forEach((rawRow,rowIndex)=>{
+    const original = Array.isArray(rawRow) ? rawRow : [];
+    const normalized = original.map(wmisB2NormalizeStructuralCell);
+    const normalizedSet = new Set(normalized.filter(Boolean));
+    const hasSwrs = normalizedSet.has('swrs') || normalizedSet.has('swrs#');
+    const hasClaim = normalizedSet.has('claim#');
+    const hasVin = normalizedSet.has('vin#');
+    const expenseMatches = [...WMIS_B2_STELLANTIS_EXPENSE_HEADERS].filter(h=>normalizedSet.has(h));
+    if(hasSwrs && hasClaim && hasVin && expenseMatches.length>0){
+      const preferredPair = normalizedSet.has('total lop expense') && normalizedSet.has('total part expense');
+      candidates.push({
+        rowIndex,
+        physicalRow: rowIndex+1,
+        originalValues: [...original],
+        normalizedValues: normalized,
+        expenseMatches,
+        preferredPair,
+        strength: (preferredPair?100:0) + expenseMatches.length,
+      });
+    }
+  });
+  if(candidates.length===0){
+    return { candidates:[], strongestCandidates:[], uniqueHeader:null, limitationCode:WMIS_B2_LIMITATION.DETAIL_HEADER_NOT_FOUND };
+  }
+  const maxStrength = Math.max(...candidates.map(c=>c.strength));
+  const strongestCandidates = candidates.filter(c=>c.strength===maxStrength);
+  if(strongestCandidates.length!==1){
+    return { candidates, strongestCandidates, uniqueHeader:null, limitationCode:WMIS_B2_LIMITATION.AMBIGUOUS_DETAIL_HEADER };
+  }
+  return { candidates, strongestCandidates, uniqueHeader:strongestCandidates[0], limitationCode:WMIS_B2_LIMITATION.NONE };
+}
+function wmisB2StellantisBuildHeaderIndex(headerCandidate){
+  const positions = {};
+  const duplicates = [];
+  const normalizedValues = headerCandidate?.normalizedValues || [];
+  normalizedValues.forEach((normalized,index)=>{
+    if(!normalized) return;
+    if(!positions[normalized]) positions[normalized]=[];
+    positions[normalized].push(index);
+  });
+  Object.keys(positions).forEach(k=>{ if(positions[k].length>1) duplicates.push({ normalizedHeader:k, columnIndexes:[...positions[k]] }); });
+  return { positions, duplicates };
+}
+const WMIS_B2_STELLANTIS_METADATA_FIELDS = [
+  { canonicalKey:'campaign_number', businessLabel:'Campaign Number', sourceLabel:'Case #', normalizedLabel:'case #' },
+  { canonicalKey:'source_debit_range_raw', businessLabel:'Debit Number Range', sourceLabel:'Debit #', normalizedLabel:'debit #' },
+  { canonicalKey:'debit_amount_total', businessLabel:'Debit Amount (Total)', sourceLabel:'Debit amount', normalizedLabel:'debit amount' },
+  { canonicalKey:'parts_quantity_total', businessLabel:'Parts Quantity (Total)', sourceLabel:'Parts Qty', normalizedLabel:'parts qty' },
+  { canonicalKey:'cost_per_part', businessLabel:'Cost Per Part', sourceLabel:'Cost per part', normalizedLabel:'cost per part' },
+  { canonicalKey:'claim_or_defect_description', businessLabel:'Claim / Defect Description', sourceLabel:'Claim:', normalizedLabel:'claim' },
+  { canonicalKey:'plant', businessLabel:'Plant', sourceLabel:'Plant', normalizedLabel:'plant' },
+];
+function wmisB2StellantisExtractMetadata(matrix, detailHeaderRowIndex){
+  const candidatesByKey = {};
+  WMIS_B2_STELLANTIS_METADATA_FIELDS.forEach(f=>{ candidatesByKey[f.canonicalKey]=[]; });
+  const rowsToInspect = Math.max(0, Math.min(detailHeaderRowIndex, Array.isArray(matrix)?matrix.length:0));
+  for(let r=0;r<rowsToInspect;r++){
+    const row = Array.isArray(matrix[r]) ? matrix[r] : [];
+    for(let c=0;c<row.length;c++){
+      const rawCell = row[c];
+      const cellText = String(rawCell===null||rawCell===undefined?'':rawCell).trim();
+      if(!cellText) continue;
+      for(const field of WMIS_B2_STELLANTIS_METADATA_FIELDS){
+        const normalizedCell = wmisB2NormalizeStructuralCell(cellText);
+        let value;
+        let rule;
+        let valueColumnIndex = c;
+        if(normalizedCell===field.normalizedLabel){
+          const adjacent = c+1<row.length ? row[c+1] : '';
+          if(adjacent!==null && adjacent!==undefined && String(adjacent).trim()!==''){
+            value = adjacent;
+            rule = 'ADJACENT_CELL';
+            valueColumnIndex = c+1;
+          }
+        }
+        const colonIndex = cellText.indexOf(':');
+        if(value===undefined && colonIndex>=0){
+          const labelPart = wmisB2NormalizeStructuralCell(cellText.slice(0,colonIndex));
+          const suffix = cellText.slice(colonIndex+1).trim();
+          if(labelPart===field.normalizedLabel && suffix!==''){
+            value = suffix;
+            rule = 'SAME_CELL_COLON_SUFFIX';
+          }
+        }
+        if(value!==undefined){
+          candidatesByKey[field.canonicalKey].push({
+            canonicalKey:field.canonicalKey,
+            businessLabel:field.businessLabel,
+            sourceLabel:field.sourceLabel,
+            value,
+            rawValue:value,
+            physicalRow:r+1,
+            physicalColumn:c+1,
+            valuePhysicalColumn:valueColumnIndex+1,
+            mode:'WORKBOOK_METADATA',
+            sourceColumn:null,
+            extractionRule:rule,
+          });
+        }
+      }
+    }
+  }
+  const resolved = {};
+  const conflicts = [];
+  const repeated = [];
+  Object.entries(candidatesByKey).forEach(([key,candidates])=>{
+    if(candidates.length===0) return;
+    const distinct = new Map();
+    candidates.forEach(c=>{
+      const signature = String(c.value).trim();
+      if(!distinct.has(signature)) distinct.set(signature,[]);
+      distinct.get(signature).push(c);
+    });
+    if(distinct.size===1){
+      resolved[key] = candidates[0];
+      if(candidates.length>1) repeated.push({ canonicalKey:key, physicalRows:candidates.map(c=>c.physicalRow) });
+    }else{
+      conflicts.push({ canonicalKey:key, sourceLabel:candidates[0].sourceLabel, physicalRows:candidates.map(c=>c.physicalRow), candidates });
+    }
+  });
+  return { rowsInspected:rowsToInspect, candidatesByKey, resolved, conflicts, repeated };
+}
+function wmisB2StellantisResolveMappedColumns(mappingObj, headerIndex){
+  const profileKey = 'STELLANTIS_CASE_DEBIT_SUMMARY_V1';
+  const requestedColumns = wmisB2BuildPreviewColumnConfig(profileKey, mappingObj);
+  const columns = [];
+  const duplicateMappedHeaders = [];
+  requestedColumns.forEach(col=>{
+    const normalizedSource = wmisB2NormalizeStructuralCell(col.sourceColumn);
+    const positions = headerIndex.positions[normalizedSource] || [];
+    if(positions.length>1){
+      duplicateMappedHeaders.push({ canonicalKey:col.canonicalKey, sourceColumn:col.sourceColumn, physicalColumnIndexes:positions.map(i=>i+1) });
+      return;
+    }
+    columns.push(Object.assign({},col,{ physicalColumnIndex:positions.length===1?positions[0]:null }));
+  });
+  return { columns, duplicateMappedHeaders };
+}
+function wmisB2StellantisIsRepeatedHeaderRow(row, normalizedHeader){
+  const normalizedRow = (Array.isArray(row)?row:[]).map(wmisB2NormalizeStructuralCell);
+  const populated = normalizedHeader.reduce((n,h,i)=>n+(h && normalizedRow[i]===h?1:0),0);
+  return populated>=3 && normalizedRow.includes('claim#') && normalizedRow.includes('vin#');
+}
+function wmisB2StellantisIsolateDetailRows(matrix, headerCandidate, columns, headerIndex){
+  const rows = [];
+  const normalizedHeader = headerCandidate.normalizedValues || [];
+  const identityNames = ['swrs','swrs#','claim#','vin#'];
+  const identityIndexes = identityNames.flatMap(h=>headerIndex.positions[h]||[]);
+  for(let r=headerCandidate.rowIndex+1;r<(Array.isArray(matrix)?matrix.length:0);r++){
+    const row = Array.isArray(matrix[r]) ? matrix[r] : [];
+    if(row.every(v=>String(v===null||v===undefined?'':v).trim()==='')) continue;
+    if(wmisB2StellantisIsRepeatedHeaderRow(row,normalizedHeader)) continue;
+    const hasIdentity = identityIndexes.some(i=>String(row[i]===null||row[i]===undefined?'':row[i]).trim()!=='');
+    const hasMappedValue = columns.some(col=>col.physicalColumnIndex!==null && String(row[col.physicalColumnIndex]===null||row[col.physicalColumnIndex]===undefined?'':row[col.physicalColumnIndex]).trim()!=='');
+    const firstNonBlank = row.map(v=>String(v===null||v===undefined?'':v).trim()).find(Boolean) || '';
+    const obviousSummary = /^(total|subtotal|summary|grand total)\b/i.test(firstNonBlank);
+    if((hasIdentity || hasMappedValue) && !obviousSummary){
+      rows.push({ physicalRow:r+1, matrixRowIndex:r, rawRow:row });
+    }
+  }
+  return rows;
+}
+function wmisB2StellantisMaterializeRows(detailRows, columns){
+  const profileKey = 'STELLANTIS_CASE_DEBIT_SUMMARY_V1';
+  const selected = detailRows.slice(0,WMIS_B2_MAX_PREVIEW_ROWS);
+  const rows = selected.map(detail=>{
+    const cells = {};
+    columns.forEach(col=>{
+      const rawValue = col.physicalColumnIndex===null ? '' : detail.rawRow[col.physicalColumnIndex];
+      cells[col.canonicalKey] = {
+        canonicalKey:col.canonicalKey,
+        businessLabel:col.businessLabel,
+        sourceLabel:col.sourceLabel,
+        rawValue:rawValue===undefined||rawValue===null?'':rawValue,
+        displayValue:wmisB2FormatNumericDisplayValue(profileKey,col.canonicalKey,rawValue===undefined||rawValue===null?'':rawValue),
+        mode:'SOURCE_COLUMN',
+        sourceColumn:col.sourceColumn,
+        physicalColumnIndex:col.physicalColumnIndex===null?null:col.physicalColumnIndex+1,
+      };
+    });
+    return { sourceRowNumber:detail.physicalRow, cells };
+  });
+  return { rows, totalSourceRows:detailRows.length, displayedRowCount:rows.length, truncated:detailRows.length>WMIS_B2_MAX_PREVIEW_ROWS };
+}
+function wmisB2BuildStellantisCaseDebitSummaryPreview(sheetMatrix, mappingObj, workbookCtx, classificationCtx){
+  const profileKey = 'STELLANTIS_CASE_DEBIT_SUMMARY_V1';
+  const profile = WMIS_B1_PROFILE_REGISTRY[profileKey];
+  const base = { profileKey, profileVersion:profile.profileVersion, operatorFacingName:profile.operatorFacingName, betaStatus:profile.betaStatus };
+  const matrix = Array.isArray(sheetMatrix) ? sheetMatrix : [];
+  const maxColumns = matrix.reduce((m,row)=>Math.max(m,Array.isArray(row)?row.length:0),0);
+  if(matrix.length===0){
+    return wmisB2CreateEmptyPreviewResult(Object.assign({},base,{
+      availability:WMIS_B2_AVAILABILITY.UNAVAILABLE,
+      limitationCode:WMIS_B2_LIMITATION.NO_SOURCE_ROWS,
+      limitationMessage:'No worksheet structure is available to inspect for this profile.',
+      notices:['Original source remains available.'],
+      sourceStructure:{ matrixRowCount:0, maximumDetectedColumnCount:0, detailHeaderFound:false, candidateDetailHeaderRows:[], requiresConfirmation:false, note:'Worksheet matrix was empty or unavailable.' },
+    }));
+  }
+  const detection = wmisB2StellantisFindDetailHeader(matrix);
+  const candidateRows = detection.candidates.map(c=>c.physicalRow);
+  if(!detection.uniqueHeader){
+    const ambiguous = detection.limitationCode===WMIS_B2_LIMITATION.AMBIGUOUS_DETAIL_HEADER;
+    return wmisB2CreateEmptyPreviewResult(Object.assign({},base,{
+      availability:WMIS_B2_AVAILABILITY.UNAVAILABLE,
+      limitationCode:detection.limitationCode,
+      limitationMessage:ambiguous?'More than one equally strong claim-detail header was detected. Source structure requires confirmation.':'The claim-detail table header could not be located using the supported Stellantis header contract.',
+      notices:['Original source remains available.'],
+      sourceStructure:{ matrixRowCount:matrix.length, maximumDetectedColumnCount:maxColumns, detailHeaderFound:false, candidateDetailHeaderRows:candidateRows, requiresConfirmation:ambiguous, note:ambiguous?'Ambiguous detail-header candidates.':'Detail header not found.' },
+    }));
+  }
+  const header = detection.uniqueHeader;
+  const headerIndex = wmisB2StellantisBuildHeaderIndex(header);
+  const metadata = wmisB2StellantisExtractMetadata(matrix,header.rowIndex);
+  const mapped = wmisB2StellantisResolveMappedColumns(mappingObj,headerIndex);
+  const detailRows = wmisB2StellantisIsolateDetailRows(matrix,header,mapped.columns,headerIndex);
+  const materialized = wmisB2StellantisMaterializeRows(detailRows,mapped.columns);
+  let batchContext = Object.values(metadata.resolved).map(m=>({
+    canonicalKey:m.canonicalKey,
+    businessLabel:m.businessLabel,
+    sourceLabel:m.sourceLabel,
+    mode:'WORKBOOK_METADATA',
+    sourceColumn:null,
+    value:m.value,
+    physicalRow:m.physicalRow,
+    physicalColumn:m.physicalColumn,
+    extractionRule:m.extractionRule,
+  }));
+  if(workbookCtx?.fileName){ batchContext.push({ canonicalKey:'source_file_name',businessLabel:'Source File Name',sourceLabel:'',mode:'WORKBOOK_METADATA',sourceColumn:null,value:workbookCtx.fileName }); }
+  if(workbookCtx?.selectedSheet){ batchContext.push({ canonicalKey:'source_worksheet',businessLabel:'Source Worksheet',sourceLabel:'',mode:'WORKBOOK_METADATA',sourceColumn:null,value:workbookCtx.selectedSheet }); }
+  batchContext = wmisB2AppendSharedClassificationContext(batchContext,classificationCtx);
+  const missingRequired = ['campaign_number','source_debit_range_raw'].filter(k=>!metadata.resolved[k]);
+  const conflictingKeys = metadata.conflicts.map(c=>c.canonicalKey);
+  const notices = ['Original source remains available.','Non-row source sections present above the detail table.','No individual Debit records were manufactured.'];
+  metadata.repeated.forEach(r=>notices.push('Repeated identical metadata retained once for '+r.canonicalKey+' (worksheet rows '+r.physicalRows.join(', ')+').'));
+  const sourceStructure = {
+    matrixRowCount:matrix.length,
+    maximumDetectedColumnCount:maxColumns,
+    detailHeaderFound:true,
+    detailHeaderPhysicalRow:header.physicalRow,
+    detailHeaderOriginalValues:header.originalValues,
+    detailHeaderNormalizedValues:header.normalizedValues,
+    candidateDetailHeaderRows:candidateRows,
+    duplicateNormalizedDetailHeaders:headerIndex.duplicates,
+    metadataRowsInspected:metadata.rowsInspected,
+    extractedMetadataKeys:Object.keys(metadata.resolved),
+    conflictingMetadataKeys:conflictingKeys,
+    detailRowsIsolated:detailRows.length,
+    nonRowSectionsPresent:header.rowIndex>0,
+    requiresConfirmation:false,
+    note:'Non-row source sections present above the detail table; only deterministically isolated rows below the detail header are previewed.',
+  };
+  let availability = WMIS_B2_AVAILABILITY.AVAILABLE;
+  let limitationCode = WMIS_B2_LIMITATION.NONE;
+  let limitationMessage = '';
+  if(mapped.duplicateMappedHeaders.length){
+    availability=WMIS_B2_AVAILABILITY.LIMITED;
+    limitationCode=WMIS_B2_LIMITATION.DUPLICATE_MAPPED_DETAIL_HEADER;
+    limitationMessage='A mapped source header occurs more than once in the detected detail table. No column was selected silently.';
+  }else if(metadata.conflicts.length){
+    availability=WMIS_B2_AVAILABILITY.LIMITED;
+    limitationCode=WMIS_B2_LIMITATION.METADATA_CONFLICT;
+    limitationMessage='Conflicting repeated batch metadata values require operator confirmation.';
+  }else if(missingRequired.length){
+    availability=WMIS_B2_AVAILABILITY.LIMITED;
+    limitationCode=WMIS_B2_LIMITATION.REQUIRED_BATCH_METADATA_MISSING;
+    limitationMessage='Required batch metadata is missing: '+missingRequired.join(', ')+'.';
+  }else if(mapped.columns.length===0){
+    availability=WMIS_B2_AVAILABILITY.LIMITED;
+    limitationCode=WMIS_B2_LIMITATION.NO_PROFILE_FIELDS_MAPPED;
+    limitationMessage='No profile fields have been mapped.';
+  }else if(detailRows.length===0){
+    availability=WMIS_B2_AVAILABILITY.LIMITED;
+    limitationCode=WMIS_B2_LIMITATION.NO_DETAIL_ROWS;
+    limitationMessage='The detail header was located, but no claim-detail rows were isolated.';
+  }
+  if(mapped.duplicateMappedHeaders.length) sourceStructure.requiresConfirmation=true;
+  if(metadata.conflicts.length) sourceStructure.requiresConfirmation=true;
+  return wmisB2CreateEmptyPreviewResult(Object.assign({},base,{
+    columns:mapped.duplicateMappedHeaders.length?[]:mapped.columns,
+    rows:mapped.duplicateMappedHeaders.length?[]:materialized.rows,
+    batchContext,
+    totalSourceRows:materialized.totalSourceRows,
+    displayedRowCount:mapped.duplicateMappedHeaders.length?0:materialized.displayedRowCount,
+    truncated:mapped.duplicateMappedHeaders.length?false:materialized.truncated,
+    availability,
+    limitationCode,
+    limitationMessage,
+    notices,
+    sourceStructure:Object.assign(sourceStructure,{ duplicateMappedHeaders:mapped.duplicateMappedHeaders, metadataConflicts:metadata.conflicts }),
+  }));
+}
+// ---- Unknown / Manual profiles ----------------------------------------------
+function wmisB2BuildUnknownManualPreview(profileKey){
+  const profile = WMIS_B1_PROFILE_REGISTRY[profileKey];
+  return wmisB2CreateEmptyPreviewResult({
+    profileKey: profile ? profile.profileKey : profileKey,
+    profileVersion: profile ? profile.profileVersion : null,
+    operatorFacingName: profile ? profile.operatorFacingName : 'Unknown / Manual',
+    betaStatus: profile ? profile.betaStatus : null,
+    availability: WMIS_B2_AVAILABILITY.LIMITED,
+    limitationCode: WMIS_B2_LIMITATION.MANUAL_PROFILE_NO_MAPPING,
+    limitationMessage: 'Mapped Profile Preview is not available until at least one manual field mapping is defined.',
+    notices: ['Original Source Preview remains available.'],
+  });
+}
+
+// ---- Profile-aware Package B2 preview factory -------------------------------
+// Dispatches by confirmed profile key only. Never invokes
+// wmisImpBuildPreviewRows, wmisImpValidate, goToSummary, the legacy
+// Campaign-shaped preview, or any database/storage behavior. Returns a
+// controlled limitation result (never a raw exception) for missing/unknown
+// profiles.
+function wmisB2BuildMappedPreviewResult(confirmedProfileKey, mappingObj, rawRowsArr, workbookCtx, classificationCtx, sheetMatrix){
+  if(!confirmedProfileKey){
+    return wmisB2CreateEmptyPreviewResult({
+      availability: WMIS_B2_AVAILABILITY.UNAVAILABLE,
+      limitationCode: WMIS_B2_LIMITATION.NO_CONFIRMED_PROFILE,
+      limitationMessage: 'Confirm an import profile before building Profile Preview.',
+    });
+  }
+  switch(confirmedProfileKey){
+    case 'GM_WARRANTY_BILL_DETAIL_V1':
+      return wmisB2BuildGmWarrantyBillDetailPreview(mappingObj, rawRowsArr, workbookCtx, classificationCtx);
+    case 'GM_COMPONENT_LOT_VIN_LIST_V1':
+      return wmisB2BuildGmComponentLotVinListPreview(mappingObj, rawRowsArr, workbookCtx, classificationCtx);
+    case 'STELLANTIS_CASE_DEBIT_SUMMARY_V1':
+      return wmisB2BuildStellantisCaseDebitSummaryPreview(sheetMatrix, mappingObj, workbookCtx, classificationCtx);
+    case 'GM_UNKNOWN_MANUAL_V1':
+    case 'STELLANTIS_UNKNOWN_MANUAL_V1':
+      return wmisB2BuildUnknownManualPreview(confirmedProfileKey);
+    default:
+      return wmisB2CreateEmptyPreviewResult({
+        profileKey: confirmedProfileKey,
+        availability: WMIS_B2_AVAILABILITY.UNAVAILABLE,
+        limitationCode: WMIS_B2_LIMITATION.UNSUPPORTED_PROFILE,
+        limitationMessage: 'This profile is not supported by Package B2 in the current pass.',
+        notices: ['Original source remains available.'],
+      });
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// PACKAGE B2 — Pass 5: Original Source Preview construction and source-
+// structure disclosure. Pure helper functions only. LOCAL PREVIEW — NOT
+// PERSISTED. Stage 5 activation and UI rendering remain deferred to Pass 6.
+// ══════════════════════════════════════════════════════════════════════════
+const WMIS_B2_SOURCE_PREVIEW_LIMIT = 100;
+function wmisB2WorksheetColumnLabel(index){
+  let n = Number(index)+1;
+  let label = '';
+  while(n>0){
+    const rem = (n-1)%26;
+    label = String.fromCharCode(65+rem)+label;
+    n = Math.floor((n-1)/26);
+  }
+  return label;
+}
+function wmisB2SourceCellValue(value){
+  return value===undefined||value===null ? '' : value;
+}
+function wmisB2CreateEmptySourcePreview(overrides){
+  return Object.assign({
+    availability: WMIS_B2_AVAILABILITY.UNAVAILABLE,
+    limitationCode: WMIS_B2_LIMITATION.NO_SOURCE_ROWS,
+    limitationMessage: 'The selected worksheet contains no source rows.',
+    representation: 'NONE',
+    columns: [],
+    rows: [],
+    totalSourceRows: 0,
+    displayedRowCount: 0,
+    truncated: false,
+    includesPhysicalHeaderRow: false,
+    sourceFileName: '',
+    sourceWorksheet: '',
+    detectedHeaders: [],
+    sourceStructure: { requiresConfirmation:false, note:'' },
+    notices: ['Original source remains available only during this browser session.','Not persisted.'],
+    generatedFromCurrentState: true,
+    notPersisted: true,
+  },overrides||{});
+}
+// Matrix representation is authoritative when available because it preserves
+// physical worksheet rows above/between tables, blank cells, pivot summaries,
+// detail headers, and exact column positions. It does not reinterpret any row
+// as a business record.
+function wmisB2BuildMatrixSourcePreview(sheetMatrix, workbookCtx, mappedPreviewResult){
+  const matrix = Array.isArray(sheetMatrix) ? sheetMatrix : [];
+  const maxColumns = matrix.reduce((m,row)=>Math.max(m,Array.isArray(row)?row.length:0),0);
+  if(matrix.length===0) return wmisB2CreateEmptySourcePreview({
+    representation:'MATRIX',
+    sourceFileName:workbookCtx?.fileName||'',
+    sourceWorksheet:workbookCtx?.selectedSheet||'',
+  });
+  const columns = Array.from({length:maxColumns},(_,index)=>({
+    key:'column_'+index,
+    physicalColumnIndex:index+1,
+    worksheetColumn:wmisB2WorksheetColumnLabel(index),
+    sourceLabel:'Worksheet Column '+wmisB2WorksheetColumnLabel(index),
+  }));
+  const selected = matrix.slice(0,WMIS_B2_SOURCE_PREVIEW_LIMIT);
+  const rows = selected.map((rawRow,rowIndex)=>{
+    const row = Array.isArray(rawRow) ? rawRow : [];
+    return {
+      sourceRowNumber:rowIndex+1,
+      cells:columns.map(col=>({
+        physicalColumnIndex:col.physicalColumnIndex,
+        worksheetColumn:col.worksheetColumn,
+        rawValue:wmisB2SourceCellValue(row[col.physicalColumnIndex-1]),
+        displayValue:wmisB2SourceCellValue(row[col.physicalColumnIndex-1]),
+      })),
+    };
+  });
+  const mappedStructure = mappedPreviewResult?.sourceStructure||{};
+  return wmisB2CreateEmptySourcePreview({
+    availability:WMIS_B2_AVAILABILITY.AVAILABLE,
+    limitationCode:WMIS_B2_LIMITATION.NONE,
+    limitationMessage:'',
+    representation:'MATRIX',
+    columns,
+    rows,
+    totalSourceRows:matrix.length,
+    displayedRowCount:rows.length,
+    truncated:matrix.length>WMIS_B2_SOURCE_PREVIEW_LIMIT,
+    includesPhysicalHeaderRow:true,
+    sourceFileName:workbookCtx?.fileName||'',
+    sourceWorksheet:workbookCtx?.selectedSheet||'',
+    detectedHeaders:Array.isArray(mappedStructure.detailHeaderOriginalValues)?[...mappedStructure.detailHeaderOriginalValues]:[],
+    sourceStructure:Object.assign({
+      matrixRowCount:matrix.length,
+      maximumDetectedColumnCount:maxColumns,
+      preservesPhysicalWorksheetLayout:true,
+      nonRowSectionsPresent:false,
+      requiresConfirmation:false,
+      note:'Physical worksheet matrix shown without normalization or row-type conversion.',
+    },mappedStructure),
+    notices:['Physical worksheet rows and columns are shown in source order.','Blank cells and non-row sections are preserved.','No row is imported, validated, or persisted.'],
+  });
+}
+// Object-row fallback supports a conventional one-header-row worksheet if a
+// matrix cannot be captured. Source header order comes from the parser's
+// explicit headers array; values are copied without normalization.
+function wmisB2BuildObjectSourcePreview(headersArr, rawRowsArr, workbookCtx){
+  const headers = Array.isArray(headersArr) ? headersArr : [];
+  const rawRows = Array.isArray(rawRowsArr) ? rawRowsArr : [];
+  if(headers.length===0 && rawRows.length===0) return wmisB2CreateEmptySourcePreview({
+    representation:'OBJECT_ROWS',
+    sourceFileName:workbookCtx?.fileName||'',
+    sourceWorksheet:workbookCtx?.selectedSheet||'',
+  });
+  const columns = headers.map((header,index)=>({
+    key:'source_'+index,
+    physicalColumnIndex:index+1,
+    worksheetColumn:wmisB2WorksheetColumnLabel(index),
+    sourceLabel:String(header),
+  }));
+  const selected = rawRows.slice(0,WMIS_B2_SOURCE_PREVIEW_LIMIT);
+  const rows = selected.map((rawRow,rowIndex)=>({
+    sourceRowNumber:rowIndex+2,
+    cells:columns.map(col=>({
+      physicalColumnIndex:col.physicalColumnIndex,
+      worksheetColumn:col.worksheetColumn,
+      sourceLabel:col.sourceLabel,
+      rawValue:wmisB2SourceCellValue(rawRow?.[col.sourceLabel]),
+      displayValue:wmisB2SourceCellValue(rawRow?.[col.sourceLabel]),
+    })),
+  }));
+  return wmisB2CreateEmptySourcePreview({
+    availability:WMIS_B2_AVAILABILITY.AVAILABLE,
+    limitationCode:WMIS_B2_LIMITATION.NONE,
+    limitationMessage:'',
+    representation:'OBJECT_ROWS',
+    columns,
+    rows,
+    totalSourceRows:rawRows.length,
+    displayedRowCount:rows.length,
+    truncated:rawRows.length>WMIS_B2_SOURCE_PREVIEW_LIMIT,
+    includesPhysicalHeaderRow:false,
+    sourceFileName:workbookCtx?.fileName||'',
+    sourceWorksheet:workbookCtx?.selectedSheet||'',
+    detectedHeaders:[...headers],
+    sourceStructure:{
+      matrixRowCount:null,
+      maximumDetectedColumnCount:headers.length,
+      preservesPhysicalWorksheetLayout:false,
+      nonRowSectionsPresent:false,
+      requiresConfirmation:false,
+      note:'Conventional header-keyed row fallback used because a worksheet matrix was unavailable.',
+    },
+    notices:['Original source headers are shown in parser-preserved order.','Raw source values are displayed without profile normalization.','No row is imported, validated, or persisted.'],
+  });
+}
+function wmisB2BuildOriginalSourcePreview(headersArr, rawRowsArr, sheetMatrix, workbookCtx, mappedPreviewResult){
+  if(Array.isArray(sheetMatrix) && sheetMatrix.length>0){
+    return wmisB2BuildMatrixSourcePreview(sheetMatrix,workbookCtx,mappedPreviewResult);
+  }
+  return wmisB2BuildObjectSourcePreview(headersArr,rawRowsArr,workbookCtx);
+}
+function wmisB2BuildSourceStructureDisclosure(mappedPreviewResult, sourcePreviewResult){
+  const mapped = mappedPreviewResult||wmisB2CreateEmptyPreviewResult();
+  const source = sourcePreviewResult||wmisB2CreateEmptySourcePreview();
+  const structure = mapped.sourceStructure||{};
+  const findings = [];
+  if(structure.detailHeaderFound){
+    findings.push({ label:'Detail header', value:'Worksheet row '+structure.detailHeaderPhysicalRow });
+  }
+  if(Array.isArray(structure.candidateDetailHeaderRows) && structure.candidateDetailHeaderRows.length>1){
+    findings.push({ label:'Candidate detail headers', value:structure.candidateDetailHeaderRows.join(', ') });
+  }
+  if(structure.nonRowSectionsPresent){
+    findings.push({ label:'Non-row source sections', value:'Present above the detected detail table' });
+  }
+  if(Number.isFinite(structure.metadataRowsInspected)){
+    findings.push({ label:'Metadata rows inspected', value:String(structure.metadataRowsInspected) });
+  }
+  if(Number.isFinite(structure.detailRowsIsolated)){
+    findings.push({ label:'Detail rows isolated', value:String(structure.detailRowsIsolated) });
+  }
+  if(Array.isArray(structure.extractedMetadataKeys) && structure.extractedMetadataKeys.length){
+    findings.push({ label:'Extracted metadata', value:structure.extractedMetadataKeys.join(', ') });
+  }
+  if(Array.isArray(structure.conflictingMetadataKeys) && structure.conflictingMetadataKeys.length){
+    findings.push({ label:'Conflicting metadata', value:structure.conflictingMetadataKeys.join(', ') });
+  }
+  if(Array.isArray(structure.duplicateNormalizedDetailHeaders) && structure.duplicateNormalizedDetailHeaders.length){
+    findings.push({ label:'Duplicate detail headers', value:structure.duplicateNormalizedDetailHeaders.map(d=>d.normalizedHeader).join(', ') });
+  }
+  return {
+    representation:source.representation,
+    matrixRowCount:source.sourceStructure?.matrixRowCount,
+    maximumDetectedColumnCount:source.sourceStructure?.maximumDetectedColumnCount||source.columns.length,
+    detailHeaderFound:Boolean(structure.detailHeaderFound),
+    nonRowSectionsPresent:Boolean(structure.nonRowSectionsPresent),
+    requiresConfirmation:Boolean(structure.requiresConfirmation),
+    findings,
+    note:structure.note||source.sourceStructure?.note||'',
+    limitationCode:mapped.limitationCode||null,
+    limitationMessage:mapped.limitationMessage||'',
+  };
+}
+// Produces both B2 preview modes from one immutable snapshot of the current
+// component inputs. Pass 6 may call this factory from the controlled Stage 5
+// transition; Pass 5 deliberately does not call it from render or a button.
+function wmisB2BuildProfilePreviewPackage(confirmedProfileKey, mappingObj, rawRowsArr, headersArr, workbookCtx, classificationCtx, sheetMatrix){
+  const mappedPreview = wmisB2BuildMappedPreviewResult(
+    confirmedProfileKey,mappingObj,rawRowsArr,workbookCtx,classificationCtx,sheetMatrix
+  );
+  const sourcePreview = wmisB2BuildOriginalSourcePreview(
+    headersArr,rawRowsArr,sheetMatrix,workbookCtx,mappedPreview
+  );
+  return {
+    mappedPreview,
+    sourcePreview,
+    sourceStructureDisclosure:wmisB2BuildSourceStructureDisclosure(mappedPreview,sourcePreview),
+    generatedFromCurrentState:true,
+    notPersisted:true,
+  };
+}
 
 // ══════════════════════════════════════════════════════════════════════════
 // SearchableSourceColumnSelect — Phase 2 usability revision.
@@ -4755,23 +6099,226 @@ function WarrantyMISImportCenter(){
   const [headerSearch, setHeaderSearch] = React.useState('');
   const fileInputRef = React.useRef(null);
 
+
+  // ── Package B1 — Classification state (transient, session-only React state) ──
+  // Not combined into one opaque string. Not persisted to localStorage,
+  // sessionStorage, IndexedDB, or any global/browser variable.
+  const [b1BusinessDomain, setB1BusinessDomain]       = React.useState(null); // WMIS_B1_DOMAIN_*
+  const [b1OemCode, setB1OemCode]                     = React.useState(null); // WMIS_B1_OEM_*
+  const [b1DocumentFamily, setB1DocumentFamily]       = React.useState(null); // profileKey (confirmed choice, pre-confirmation)
+  const [b1SuggestedProfileKey, setB1SuggestedProfileKey] = React.useState(null);
+  const [b1ConfirmedProfileKey, setB1ConfirmedProfileKey] = React.useState(null);
+  const [b1MatchConfidence, setB1MatchConfidence]     = React.useState(null); // WMIS_B1_CONFIDENCE_*
+  const [b1MatchEvidence, setB1MatchEvidence]         = React.useState([]);   // array of evidence strings
+  const [b1ClassificationConfirmed, setB1ClassificationConfirmed] = React.useState(false);
+  const [b1Mapping, setB1Mapping]                     = React.useState({});  // canonicalKey -> { mode, value }
+  const [b1OpenSourceColumnField, setB1OpenSourceColumnField] = React.useState(null);
+  const [b1HeaderSearch, setB1HeaderSearch]           = React.useState('');
+  const [b1PendingDestructiveChange, setB1PendingDestructiveChange] = React.useState(null); // { reason, apply } | null
+
+  // ── Package B2 — Profile Preview state (transient, session-only React state) ──
+  // LOCAL PREVIEW — NOT PERSISTED. No network requests, no Supabase access,
+  // no localStorage/sessionStorage/IndexedDB writes. Cleared whenever the
+  // underlying file, worksheet, classification, or mapping configuration
+  // changes so a stale preview can never be shown against new inputs.
+  const [b2PreviewMode, setB2PreviewMode]             = React.useState('mapped'); // 'mapped' | 'source'
+  const [b2PreviewBuilt, setB2PreviewBuilt]           = React.useState(false);
+  const [b2PreviewData, setB2PreviewData]             = React.useState(null);   // profile-specific mapped preview rows/columns
+  const [b2SourcePreviewData, setB2SourcePreviewData] = React.useState(null);   // original-source preview rows/columns
+  const [b2PreviewError, setB2PreviewError]           = React.useState('');
+  const [b2SheetMatrix, setB2SheetMatrix]             = React.useState(null);   // Pass 4: raw AOA structural capture of the loaded worksheet (transient, not persisted)
+
+  // Clears all Package B2 preview state. Does not touch B1 classification or
+  // mapping state. Safe to call defensively even if no preview was built yet.
+  const wmisB2ClearPreview = ()=>{
+    setB2PreviewMode('mapped');
+    setB2PreviewBuilt(false);
+    setB2PreviewData(null);
+    setB2SourcePreviewData(null);
+    setB2PreviewError('');
+  };
+  // Clears only the current worksheet's structural source representation.
+  // Classification or mapping changes retain the matrix for the active sheet;
+  // file replacement, sheet replacement, parse failure, and full discard clear it.
+  const wmisB2ClearWorksheetSource = ()=>{
+    setB2SheetMatrix(null);
+  };
+
+  // Clears all Package B1 classification + mapping state. Used on file
+  // change, worksheet change, Reset/Discard, and confirmed destructive
+  // classification changes. Does not touch the legacy stage/mapping state.
+  const wmisB1ClearClassificationAndMapping = ()=>{
+    setB1BusinessDomain(null);
+    setB1OemCode(null);
+    setB1DocumentFamily(null);
+    setB1SuggestedProfileKey(null);
+    setB1ConfirmedProfileKey(null);
+    setB1MatchConfidence(null);
+    setB1MatchEvidence([]);
+    setB1ClassificationConfirmed(false);
+    setB1Mapping({});
+    setB1OpenSourceColumnField(null);
+    setB1HeaderSearch('');
+    setB1PendingDestructiveChange(null);
+  };
+
+
+  // ── Package B1 — Conservative, deterministic profile suggestion logic ──────
+  // Uses only: worksheet name, normalized header overlap with a profile's
+  // strongHeaderSet, and filename pattern as SUPPORTING evidence only.
+  // No fuzzy semantic scoring. Filename alone can never produce a Strong Match.
+  const wmisB1NormalizeHeader = (h)=> String(h==null?'':h).trim().toLowerCase();
+
+  const wmisB1SuggestProfile = (domainCode, oemCode, hdrs, sheetName, fname)=>{
+    const candidateKeys = WMIS_B1_DOCUMENT_FAMILIES_BY_COMBO[`${domainCode}|${oemCode}`];
+    if(!candidateKeys) return { suggestedProfileKey:null, confidence: WMIS_B1_CONFIDENCE_UNKNOWN, evidence:['Domain/OEM combination is not supported in Package B1.'] };
+    const normHeaders = new Set((hdrs||[]).map(wmisB1NormalizeHeader));
+    let best = null;
+    for(const key of candidateKeys){
+      const profile = WMIS_B1_PROFILE_REGISTRY[key];
+      if(!profile || !profile.matchIndicators) continue;
+      const strongSet = profile.matchIndicators.strongHeaderSet || [];
+      if(strongSet.length===0) continue; // Unknown/Manual profiles are never auto-suggested
+      const matched = strongSet.filter(h=>normHeaders.has(wmisB1NormalizeHeader(h)));
+      const overlapRatio = strongSet.length ? matched.length/strongSet.length : 0;
+      const evidence = [];
+      if(matched.length){ evidence.push(`Header match: ${matched.join(', ')} (${matched.length}/${strongSet.length}).`); }
+      const worksheetHints = profile.matchIndicators.worksheetNameHints || [];
+      const worksheetMatched = sheetName && worksheetHints.some(w=>String(sheetName).toLowerCase()===String(w).toLowerCase());
+      if(worksheetMatched){ evidence.push(`Worksheet name matches expected hint "${sheetName}".`); }
+      const metadataHints = profile.matchIndicators.metadataLabelHints || [];
+      // metadata label hints are not inspected from parsed row headers in Package B1
+      // (multi-section metadata parsing is not implemented); they remain descriptive only.
+      const filenamePattern = profile.matchIndicators.filenamePattern;
+      const filenameMatched = Boolean(filenamePattern && fname && filenamePattern.test(fname));
+      if(filenameMatched){ evidence.push(`Filename pattern matches (supporting evidence only, not sufficient alone).`); }
+
+      let confidence;
+      if(overlapRatio >= 0.8 && worksheetMatched){
+        confidence = WMIS_B1_CONFIDENCE_STRONG;
+      } else if(overlapRatio >= 0.8){
+        confidence = WMIS_B1_CONFIDENCE_STRONG;
+      } else if(overlapRatio >= 0.4){
+        confidence = WMIS_B1_CONFIDENCE_PARTIAL;
+      } else if(matched.length > 0 || filenameMatched){
+        confidence = WMIS_B1_CONFIDENCE_WEAK;
+      } else {
+        continue;
+      }
+      if(!best || matched.length > best.matched.length){
+        best = { profileKey:key, confidence, evidence, matched };
+      }
+    }
+    if(!best) return { suggestedProfileKey:null, confidence: WMIS_B1_CONFIDENCE_UNKNOWN, evidence:['No known profile evidence detected in the reviewed headers.'] };
+    return { suggestedProfileKey: best.profileKey, confidence: best.confidence, evidence: best.evidence };
+  };
+
+  // Recompute suggestion whenever Domain/OEM/headers change; never silently
+  // confirms — only updates the suggestion, not confirmedProfileKey.
+  const wmisB1RecomputeSuggestion = (domainCode, oemCode)=>{
+    if(!domainCode || !oemCode || !wmisB1IsSupportedCombo(domainCode, oemCode)){
+      setB1SuggestedProfileKey(null);
+      setB1MatchConfidence(null);
+      setB1MatchEvidence([]);
+      return;
+    }
+    const result = wmisB1SuggestProfile(domainCode, oemCode, headers, selectedSheet, fileName);
+    setB1SuggestedProfileKey(result.suggestedProfileKey);
+    setB1MatchConfidence(result.confidence);
+    setB1MatchEvidence(result.evidence);
+  };
+
+  // Explicit operator confirmation gate. No profile suggestion becomes
+  // authoritative without this call. Confirming after mappings already exist
+  // for a DIFFERENT profileKey is handled by the destructive-change guard
+  // (wmisB1RequestClassificationChange), not here.
+  const wmisB1ConfirmDocumentFamily = (profileKey)=>{
+    setB1DocumentFamily(profileKey);
+    setB1ConfirmedProfileKey(profileKey);
+    setB1ClassificationConfirmed(true);
+    wmisB2ClearPreview(); // B2: a (re)confirmed profile invalidates any prior preview
+  };
+
+  // Destructive-change guard: changing Domain, OEM, Document Family, or the
+  // confirmed profile after mappings exist clears mapping/fixed-value/search/
+  // open-combobox/future preview/validation/summary state. A native browser
+  // confirmation is used per the approved Package B1 contract; the operator
+  // may cancel and the prior state is preserved unchanged.
+  const wmisB1HasActiveB1Mappings = ()=> Object.keys(b1Mapping||{}).length > 0;
+
+  
+  // Pass 5 — stale-profile cleanup. Invoked whenever the underlying file or
+  // worksheet changes (new upload, sheet switch, Clear File / Discard /
+  // Start New Preview) so a classification/profile/mapping from a PREVIOUS
+  // workbook can never silently apply to a new one. This is unconditional
+  // (no confirm prompt) because there is no in-progress work on the new file
+  // yet to lose; it is distinct from wmisB1RequestClassificationChange, which
+  // guards an operator-initiated change on the SAME file.
+  const wmisB1FullReset = ()=>{
+    setB1BusinessDomain(null);
+    setB1OemCode(null);
+    setB1DocumentFamily(null);
+    setB1SuggestedProfileKey(null);
+    setB1MatchConfidence(null);
+    setB1MatchEvidence([]);
+    setB1ConfirmedProfileKey(null);
+    setB1ClassificationConfirmed(false);
+    setB1Mapping({});
+    setB1OpenSourceColumnField(null);
+    setB1HeaderSearch('');
+    wmisB2ClearPreview(); // B2: file/worksheet/reset must not carry a stale preview
+  };
+
+  const wmisB1RequestClassificationChange = (changeFn)=>{
+    if(wmisB1HasActiveB1Mappings()){
+      const proceed = window.confirm(
+        'Changing Business Domain, OEM, or Document Family will clear your current ' +
+        'mapping selections, fixed values, and any in-progress classification for this ' +
+        'file. This does not affect the source workbook. Continue?'
+      );
+      if(!proceed) return false;
+      setB1Mapping({});
+      setB1OpenSourceColumnField(null);
+      setB1HeaderSearch('');
+      wmisB2ClearPreview(); // B2: destructive classification change invalidates any existing preview
+    }
+    changeFn();
+    return true;
+  };
+
+
+
   const resetAll = ()=>{
     setStage('start'); setDrag(false); setFileName(''); setFileSize(null); setFileFormat('');
     setError(''); setWorkbook(null); setSheetNames([]); setSelectedSheet('');
     setHeaders([]); setRawRows([]); setMapping({}); setAutoFlags({}); setOpenSourceColumnField(null);
     setHeaderSearch('');
+    wmisB1FullReset();
+    wmisB2ClearWorksheetSource();
     if(fileInputRef.current) fileInputRef.current.value='';
   };
 
   const loadSheet = (wb, sheetName)=>{
+    // Replacing the active worksheet clears the previous matrix and generated
+    // preview before parsing, but successful parsing retains the new matrix.
+    wmisB2ClearPreview();
+    wmisB2ClearWorksheetSource();
     try{
       const ws = wb.Sheets[sheetName];
       if(!ws){ setError('Selected worksheet could not be read.'); return; }
       const json = XLSX.utils.sheet_to_json(ws, { defval:'', raw:false });
+      let matrix = null;
+      try{
+        matrix = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false, blankrows:true });
+      }catch(matrixErr){
+        matrix = null;
+      }
       if(!json.length){
         setHeaders([]); setRawRows([]); setMapping({}); setAutoFlags({}); setOpenSourceColumnField(null);
         setHeaderSearch('');
         setSelectedSheet(sheetName);
+        wmisB1FullReset();
+        setB2SheetMatrix(matrix);
         setStage('review');
         return;
       }
@@ -4784,14 +6331,21 @@ function WarrantyMISImportCenter(){
       setOpenSourceColumnField(null);
       setHeaderSearch('');
       setSelectedSheet(sheetName);
+      wmisB1FullReset();
+      // This setter intentionally occurs after the B1 reset. B1 reset clears
+      // generated preview state but no longer clears the active worksheet matrix.
+      setB2SheetMatrix(matrix);
       setStage('review');
     }catch(e){
+      wmisB2ClearPreview();
+      wmisB2ClearWorksheetSource();
       setError('The selected worksheet could not be parsed. Please verify the file is a valid workbook.');
     }
   };
-
   const processFile = (file)=>{
     setError('');
+    wmisB2ClearPreview();
+    wmisB2ClearWorksheetSource();
     if(!file){ return; }
     const nameLower = file.name.toLowerCase();
     const isCsv = nameLower.endsWith('.csv');
@@ -4882,6 +6436,50 @@ function WarrantyMISImportCenter(){
     setStage('summary');
   };
 
+  // Package B2 Pass 6 — controlled Stage 5 transition. Builds both preview
+  // modes from the current transient source/classification/mapping snapshot.
+  // No validation, Import Summary, persistence, or network behavior occurs.
+  const wmisB2ContinueToProfilePreview = ()=>{
+    if(!b1ClassificationConfirmed || !b1ConfirmedProfileKey){
+      setB2PreviewError('Confirm an import profile before building Profile Preview.');
+      return;
+    }
+    try{
+      const profile = WMIS_B1_PROFILE_REGISTRY[b1ConfirmedProfileKey];
+      const previewPackage = wmisB2BuildProfilePreviewPackage(
+        b1ConfirmedProfileKey,
+        b1Mapping,
+        rawRows,
+        headers,
+        { fileName, selectedSheet },
+        {
+          businessDomain:b1BusinessDomain,
+          oemCode:b1OemCode,
+          profileKey:b1ConfirmedProfileKey,
+          profileVersion:profile?.profileVersion||'',
+        },
+        b2SheetMatrix
+      );
+      setB2PreviewData({
+        mappedPreview:previewPackage.mappedPreview,
+        sourceStructureDisclosure:previewPackage.sourceStructureDisclosure,
+      });
+      setB2SourcePreviewData(previewPackage.sourcePreview);
+      setB2PreviewMode('mapped');
+      setB2PreviewError('');
+      setB2PreviewBuilt(true);
+      setStage('preview');
+    }catch(e){
+      setB2PreviewBuilt(false);
+      setB2PreviewData(null);
+      setB2SourcePreviewData(null);
+      setB2PreviewError('Profile Preview could not be prepared from the current browser-local source state.');
+    }
+  };
+  const wmisB2DiscardPreviewOnly = ()=>{
+    wmisB2ClearPreview();
+    setStage('mapping');
+  };
   const sampleValueFor = (col)=>{
     if(!col || !rawRows.length) return '—';
     const v = rawRows[0][col];
@@ -4963,9 +6561,10 @@ function WarrantyMISImportCenter(){
       {stage!=='start' && workbook && (
         <Card style={{padding:'20px'}}>
           <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
-            {['review','mapping','preview','validation','summary'].map(s=>(
+            <Pill key="start" color={stage==='start'?'#1B2A5E':'#9A9484'} soft={stage!=='start'}>Select File</Pill>
+            {['review','classify','mapping','preview','validation','summary'].map(s=>(
               <Pill key={s} color={stage===s?'#1B2A5E':'#9A9484'} soft={stage!==s}>
-                {s==='review'?'Workbook Review':s==='mapping'?'Column Mapping':s==='preview'?'Data Preview':s==='validation'?'Validation Review':'Import Summary'}
+                {s==='review'?'Workbook Review':s==='classify'?'Classify Import':s==='mapping'?'Column Mapping':s==='preview'?'Profile Preview':s==='validation'?'Validation Review':'Import Summary'}
               </Pill>
             ))}
           </div>
@@ -5067,7 +6666,92 @@ function WarrantyMISImportCenter(){
               </div>
 
               <div>
-                <Btn variant="primary" onClick={()=>setStage('mapping')} disabled={!rawRows.length}>
+                <Btn variant="primary" onClick={()=>setStage('classify')} disabled={!rawRows.length}>
+                  Continue to Classify Import
+                </Btn>
+              </div>
+            </div>
+          )}
+
+          {stage==='classify' && (
+            <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+              <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                <div style={{fontSize:'13px',fontWeight:600,color:C.ink}}>Classify Import</div>
+                <span style={{fontSize:'10.5px',fontWeight:700,color:'#9A6B00',background:'#FFF3D6',border:'1px solid #F0D08A',borderRadius:'4px',padding:'1px 6px'}}>BETA — LOCAL PREVIEW, NOT PERSISTED</span>
+              </div>
+              <div style={{fontSize:'12px',color:C.inkMute}}>
+                Select the Business Domain, OEM, and Document Family that describe this workbook.
+                This classification only controls which fields are shown for mapping in this local
+                preview session; it does not change stored data, canonical fields, or Import Summary
+                behavior.
+              </div>
+
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'10px'}}>
+                <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
+                  <label style={{fontSize:'11px',fontWeight:600,color:C.inkSub}}>Business Domain</label>
+                  <select value={b1BusinessDomain||''} onChange={e=>{const v=e.target.value||null; wmisB1RequestClassificationChange(()=>{setB1BusinessDomain(v); setB1OemCode(null); setB1DocumentFamily(null); setB1SuggestedProfileKey(null); setB1ConfirmedProfileKey(null); setB1ClassificationConfirmed(false);});}}
+                    style={{fontSize:'12.5px',padding:'6px 8px',border:`1px solid ${C.borderSoft}`,borderRadius:'6px'}}>
+                    <option value="">Select…</option>
+                    {WMIS_B1_BUSINESS_DOMAINS.map(d=>(
+                      <option key={d.code} value={d.code}>{d.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
+                  <label style={{fontSize:'11px',fontWeight:600,color:C.inkSub}}>OEM</label>
+                  <select value={b1OemCode||''} onChange={e=>{const v=e.target.value||null; wmisB1RequestClassificationChange(()=>{setB1OemCode(v); setB1DocumentFamily(null); setB1SuggestedProfileKey(null); setB1ConfirmedProfileKey(null); setB1ClassificationConfirmed(false); wmisB1RecomputeSuggestion(b1BusinessDomain, v);});}}
+                    disabled={!b1BusinessDomain}
+                    style={{fontSize:'12.5px',padding:'6px 8px',border:`1px solid ${C.borderSoft}`,borderRadius:'6px'}}>
+                    <option value="">Select…</option>
+                    {WMIS_B1_OEMS.map(o=>(
+                      <option key={o.code} value={o.code}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
+                  <label style={{fontSize:'11px',fontWeight:600,color:C.inkSub}}>Document Family</label>
+                  <select value={b1DocumentFamily||''} onChange={e=>{const v=e.target.value||null; wmisB1RequestClassificationChange(()=>{setB1DocumentFamily(v); setB1ConfirmedProfileKey(null); setB1ClassificationConfirmed(false);});}}
+                    disabled={!b1BusinessDomain||!b1OemCode}
+                    style={{fontSize:'12.5px',padding:'6px 8px',border:`1px solid ${C.borderSoft}`,borderRadius:'6px'}}>
+                    <option value="">Select…</option>
+                    {(wmisB1GetDocumentFamilyOptions(b1BusinessDomain,b1OemCode)||[]).map(f=>(
+                      <option key={f.profileKey} value={f.profileKey}>{f.documentFamily}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {b1BusinessDomain && b1OemCode && !wmisB1GetDocumentFamilyOptions(b1BusinessDomain,b1OemCode) && (
+                <div style={{fontSize:'12px',color:'#8A3B12',background:'#FFF0E8',border:'1px solid #F2C9AE',borderRadius:'6px',padding:'8px 10px'}}>
+                  This Business Domain / OEM combination is not supported in Package B1.
+                  Select a supported Business Domain / OEM combination to continue; classification and mapping cannot proceed for this pairing.
+                </div>
+              )}
+
+              {b1SuggestedProfileKey && !b1ClassificationConfirmed && (
+                <div style={{fontSize:'12px',color:C.inkSub,background:'#F3F6FC',border:`1px solid ${C.borderSoft}`,borderRadius:'6px',padding:'8px 10px',display:'flex',flexDirection:'column',gap:'4px'}}>
+                  <div><strong>Suggested profile:</strong> {WMIS_B1_PROFILE_REGISTRY[b1SuggestedProfileKey]?.operatorFacingName} ({b1MatchConfidence})</div>
+                  {!!b1MatchEvidence?.length && (
+                    <ul style={{margin:0,paddingLeft:'18px'}}>
+                      {b1MatchEvidence.map((ev,idx)=><li key={idx}>{ev}</li>)}
+                    </ul>
+                  )}
+                  <div style={{fontSize:'11px',color:C.inkMute}}>This suggestion is not applied until you confirm it below.</div>
+                </div>
+              )}
+
+              <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                <Btn variant="primary" disabled={!b1DocumentFamily} onClick={()=>wmisB1ConfirmDocumentFamily(b1DocumentFamily)}>
+                  Confirm Classification
+                </Btn>
+                {b1ClassificationConfirmed && (
+                  <span style={{fontSize:'11.5px',color:'#1E7A3D'}}>Classification confirmed: {WMIS_B1_PROFILE_REGISTRY[b1ConfirmedProfileKey]?.operatorFacingName}</span>
+                )}
+              </div>
+
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn variant="ghost" onClick={()=>setStage('review')}>Back to Workbook Review</Btn>
+                <Btn variant="primary" onClick={()=>setStage('mapping')} disabled={!b1ClassificationConfirmed}>
                   Continue to Column Mapping
                 </Btn>
               </div>
@@ -5082,6 +6766,69 @@ function WarrantyMISImportCenter(){
                 Package 004 or Package 006 tables. Choose Source Column for row-specific values, or Fixed
                 Value only where a single batch-level value legitimately applies to every previewed row.
               </div>
+              {b1ClassificationConfirmed ? (
+              <>
+              <div style={{display:'flex',flexDirection:'column',gap:'4px',marginBottom:'2px'}}>
+                <div style={{fontSize:'11.5px',fontWeight:600,color:C.ink}}>
+                  Profile: {WMIS_B1_PROFILE_REGISTRY[b1ConfirmedProfileKey]?.operatorFacingName}
+                  {WMIS_B1_PROFILE_REGISTRY[b1ConfirmedProfileKey]?.betaStatus==='PROVISIONAL' &&
+                    <span style={{marginLeft:'6px',fontSize:'10px',fontWeight:700,color:'#9A6B00'}}>PROVISIONAL</span>}
+                </div>
+                <div style={{fontSize:'11px',color:C.inkMute}}>
+                  {WMIS_B1_PROFILE_REGISTRY[b1ConfirmedProfileKey]?.betaDisclaimer}
+                </div>
+              </div>
+              {wmisB1GetEffectiveFields(b1ConfirmedProfileKey).groups.map(grp=>(
+                <div key={grp.group} style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+                  <div style={{fontSize:'11px',fontWeight:700,color:C.inkSub,textTransform:'uppercase',letterSpacing:'0.06em'}}>
+                    {grp.group}{grp.fields[0]?.level===WMIS_B1_LEVEL.BATCH?' (Batch Context)':''}
+                  </div>
+                  <div style={{overflowX:'auto', overflowY:'visible', paddingBottom:'4px'}}>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12.5px'}}>
+                      <thead>
+                        <tr>
+                          <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Business Field</th>
+                          <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Source Label</th>
+                          <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Source Column</th>
+                          <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Requirement</th>
+                          <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute}}>Sample</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {grp.fields.map(f=>{
+                          const val = b1Mapping[f.canonicalKey] || '';
+                          return (
+                          <tr key={f.canonicalKey} style={{borderTop:`1px solid ${C.borderSoft}`}}>
+                            <td style={{padding:'6px 8px'}}>{f.businessLabel}</td>
+                            <td style={{padding:'6px 8px',color:C.inkMute}}>{f.sourceLabel || '—'}</td>
+                            <td style={{padding:'6px 8px',minWidth:'160px'}}>
+                              {f.level===WMIS_B1_LEVEL.BATCH && f.mappingModes?.includes(WMIS_B1_MODE.WORKBOOK_METADATA) && !f.mappingModes?.includes(WMIS_B1_MODE.SOURCE_COLUMN) ? (
+                                <span style={{color:C.inkFaint}}>Workbook metadata (auto)</span>
+                              ) : (
+                                <Sel value={val} onChange={e=>{setB1Mapping(m=>({...m,[f.canonicalKey]:e.target.value||undefined})); wmisB2ClearPreview();}} style={{width:'100%'}}>
+                                  <option value="">(not mapped)</option>
+                                  {headers.map(h=><option key={h} value={h}>{h}</option>)}
+                                </Sel>
+                              )}
+                            </td>
+                            <td style={{padding:'6px 8px'}}>
+                              {f.requirement===WMIS_B1_REQUIREMENT.REQUIRED ? <Pill color="#B14C3C">Required</Pill>
+                                : f.requirement===WMIS_B1_REQUIREMENT.CONDITIONAL ? <Pill color="#9A6B00">Conditional</Pill>
+                                : <span style={{color:C.inkFaint}}>Optional</span>}
+                            </td>
+                            <td style={{padding:'6px 8px',color:C.inkMute}}>
+                              {val && rawRows.slice(0,3).map(r=>r[val]).filter(Boolean).join(' · ')}
+                            </td>
+                          </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+              </>
+            ) : (
               <div style={{overflowX:'auto', overflowY:'visible', paddingBottom:'4px'}}>
                 <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12.5px'}}>
                   <thead>
@@ -5167,59 +6914,154 @@ function WarrantyMISImportCenter(){
                   </tbody>
                 </table>
               </div>
-              <div style={{display:'flex',gap:'8px'}}>
-                <Btn variant="ghost" onClick={()=>setStage('review')}>Back to Workbook Review</Btn>
-                <Btn variant="primary" onClick={()=>setStage('preview')}>Continue to Data Preview</Btn>
+            )}
+              <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+                {b1ClassificationConfirmed ? (
+                  <div style={{border:`1px solid ${C.borderSoft}`,borderRadius:'8px',padding:'10px 12px',background:'#F7F8FA',display:'flex',flexDirection:'column',gap:'7px'}}>
+                    <div style={{fontSize:'12px',fontWeight:700,color:C.ink}}>Package B2 Profile Preview</div>
+                    <div style={{fontSize:'11.5px',color:C.inkMute}}>
+                      Build a browser-local mapped profile preview and an unmodified original-source preview.
+                      This does not validate, import, upload, or persist the workbook.
+                    </div>
+                    <div>
+                      <Btn variant="primary" onClick={wmisB2ContinueToProfilePreview} disabled={!b1ClassificationConfirmed}>
+                        Continue to Profile Preview
+                      </Btn>
+                    </div>
+                  </div>
+                ) : null}
+                <div style={{display:'flex',gap:'8px'}}>
+                  <Btn variant="ghost" onClick={()=>setStage('classify')}>Back to Classify Import</Btn>
+                  {!b1ClassificationConfirmed && (
+                    <Btn variant="primary" onClick={()=>setStage('preview')}>Continue to Data Preview</Btn>
+                  )}
+                </div>
               </div>
             </div>
           )}
 
-          {stage==='preview' && (
+          {stage==='preview' && b1ClassificationConfirmed && (
             <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
-              <div style={{fontSize:'13px',fontWeight:600,color:C.ink}}>Data Preview</div>
-              <div style={{fontSize:'12px',color:C.inkMute}}>
-                Total parsed rows: <strong>{preview.total}</strong> · Previewed rows: <strong>{preview.rows.length}</strong>
-                {preview.total>preview.rows.length ? ' · Preview truncated to first 100 rows.' : ''}
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'12px',flexWrap:'wrap'}}>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:600,color:C.ink}}>Profile Preview</div>
+                  <div style={{fontSize:'11.5px',color:C.inkMute,marginTop:'3px'}}>
+                    {WMIS_B1_PROFILE_REGISTRY[b1ConfirmedProfileKey]?.operatorFacingName} · Browser session only · Not persisted
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:'6px'}}>
+                  <Btn size="sm" variant={b2PreviewMode==='mapped'?'primary':'ghost'} onClick={()=>setB2PreviewMode('mapped')}>
+                    Mapped Profile Preview
+                  </Btn>
+                  <Btn size="sm" variant={b2PreviewMode==='source'?'primary':'ghost'} onClick={()=>setB2PreviewMode('source')}>
+                    Original Source Preview
+                  </Btn>
+                </div>
               </div>
-              <div style={{overflowX:'auto',maxHeight:'420px',overflowY:'auto'}}>
-                <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
-                  <thead>
-                    <tr>
-                      <th style={{textAlign:'left',padding:'6px 8px',color:C.inkMute,position:'sticky',top:0,background:C.panel}}>Source Row</th>
-                      {WMIS_IMPORT_CANONICAL_FIELDS.map(f=>(
-                        <th key={f.key} style={{textAlign:'left',padding:'6px 8px',color:C.inkMute,position:'sticky',top:0,background:C.panel,whiteSpace:'nowrap'}}>{f.label}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.rows.map(r=>(
-                      <tr key={r.__sourceRow} style={{borderTop:`1px solid ${C.borderSoft}`}}>
-                        <td style={{padding:'6px 8px',color:C.inkFaint}}>{r.__sourceRow}</td>
-                        {WMIS_IMPORT_CANONICAL_FIELDS.map(f=>{
-                          const cell = r[f.key];
-                          if(WMIS_IMPORT_NUMERIC_FIELDS.has(f.key)){
-                            return (
-                              <td key={f.key} style={{padding:'6px 8px',whiteSpace:'nowrap'}}>
-                                {cell.isMissing ? <span style={{color:C.inkFaint}}>—</span>
-                                  : cell.isInvalid ? <span style={{color:'#B14C3C'}}>Invalid</span>
-                                  : cell.value.toFixed(5)}
-                              </td>
-                            );
-                          }
-                          return <td key={f.key} style={{padding:'6px 8px',whiteSpace:'nowrap'}}>{cell.text || <span style={{color:C.inkFaint}}>—</span>}</td>;
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              {b2PreviewError && (
+                <div style={{padding:'9px 11px',borderRadius:'6px',background:'#FBEAE8',color:'#B14C3C',fontSize:'12px'}}>
+                  {b2PreviewError}
+                </div>
+              )}
+              {!b2PreviewBuilt ? (
+                <div style={{padding:'18px',border:`1px solid ${C.borderSoft}`,borderRadius:'8px',color:C.inkMute,fontSize:'12px'}}>
+                  Preview unavailable. Return to Column Mapping and rebuild the preview from the current source state.
+                </div>
+              ) : b2PreviewMode==='mapped' ? (()=>{
+                const result=b2PreviewData?.mappedPreview;
+                if(!result) return <div style={{fontSize:'12px',color:C.inkMute}}>Mapped preview unavailable. Original source remains available.</div>;
+                return <>
+                  <div style={{display:'flex',gap:'7px',flexWrap:'wrap'}}>
+                    <Pill color={result.availability==='AVAILABLE'?'#3B7D4F':result.availability==='LIMITED'?'#B08A2E':'#B14C3C'}>{result.availability}</Pill>
+                    <Pill color="#3B4A73">Total source rows: {result.totalSourceRows}</Pill>
+                    <Pill color="#3B4A73">Displayed: {result.displayedRowCount}</Pill>
+                    {result.truncated&&<Pill color="#B08A2E">First 100 rows shown</Pill>}
+                    <Pill color="#9A9484">Not persisted</Pill>
+                  </div>
+                  {result.limitationMessage&&(
+                    <div style={{padding:'9px 11px',borderRadius:'6px',background:'#FBF3E2',color:'#7A5B16',fontSize:'12px'}}>
+                      <strong>{result.limitationCode||'Preview limitation'}:</strong> {result.limitationMessage}
+                    </div>
+                  )}
+                  {!!result.notices?.length&&(
+                    <div style={{fontSize:'11.5px',color:C.inkMute,lineHeight:1.55}}>
+                      {result.notices.map((n,i)=><div key={i}>• {n}</div>)}
+                    </div>
+                  )}
+                  {!!result.batchContext?.length&&(
+                    <div>
+                      <div style={{fontSize:'11px',fontWeight:700,color:C.inkSub,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:'6px'}}>Batch Context</div>
+                      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:'7px'}}>
+                        {result.batchContext.map((entry,i)=><div key={`${entry.canonicalKey}-${i}`} style={{padding:'8px 10px',border:`1px solid ${C.borderSoft}`,borderRadius:'6px',background:C.panelAlt}}>
+                          <div style={{fontSize:'10px',textTransform:'uppercase',letterSpacing:'0.05em',color:C.inkMute}}>{entry.businessLabel}</div>
+                          <div style={{fontSize:'12.5px',color:C.ink,marginTop:'2px',wordBreak:'break-word'}}>{entry.value===''||entry.value==null?<span style={{color:C.inkFaint}}>Unresolved</span>:String(entry.value)}</div>
+                          <div style={{fontSize:'10px',color:C.inkFaint,marginTop:'2px'}}>{entry.sourceLabel?`Source: ${entry.sourceLabel} · `:''}{entry.mode}</div>
+                        </div>)}
+                      </div>
+                    </div>
+                  )}
+                  {result.columns?.length>0&&result.rows?.length>0 ? (
+                    <div style={{overflowX:'auto',maxHeight:'420px',overflowY:'auto',border:`1px solid ${C.borderSoft}`,borderRadius:'8px'}}>
+                      <table style={{borderCollapse:'collapse',fontSize:'12px',minWidth:'100%',width:'max-content'}}>
+                        <thead><tr>
+                          <th style={{textAlign:'left',padding:'7px 9px',position:'sticky',top:0,left:0,background:C.panelAlt,zIndex:2,whiteSpace:'nowrap'}}>Source Row</th>
+                          {result.columns.map(col=><th key={col.canonicalKey} title={col.sourceColumn||col.sourceLabel||''} style={{textAlign:'left',padding:'7px 9px',position:'sticky',top:0,background:C.panelAlt,whiteSpace:'nowrap'}}>{col.businessLabel}</th>)}
+                        </tr></thead>
+                        <tbody>{result.rows.map((row,ri)=><tr key={`${row.sourceRowNumber}-${ri}`} style={{borderTop:`1px solid ${C.borderSoft}`}}>
+                          <td style={{padding:'6px 9px',position:'sticky',left:0,background:C.panel,whiteSpace:'nowrap',color:C.inkFaint}}>{row.sourceRowNumber}</td>
+                          {result.columns.map(col=>{const cell=row.cells?.[col.canonicalKey];return <td key={col.canonicalKey} title={cell?.sourceColumn?`Source Column: ${cell.sourceColumn}`:''} style={{padding:'6px 9px',whiteSpace:'nowrap'}}>{cell?.displayValue===''||cell?.displayValue==null?<span style={{color:C.inkFaint}}>—</span>:String(cell.displayValue)}</td>;})}
+                        </tr>)}</tbody>
+                      </table>
+                    </div>
+                  ) : <div style={{padding:'14px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.inkMute}}>No mapped profile rows are available. Original source remains available.</div>}
+                  {b2PreviewData?.sourceStructureDisclosure&&(
+                    <div style={{padding:'10px 12px',border:`1px solid ${C.borderSoft}`,borderRadius:'8px',background:C.panelAlt}}>
+                      <div style={{fontSize:'11px',fontWeight:700,color:C.inkSub,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:'5px'}}>Source Structure</div>
+                      {b2PreviewData.sourceStructureDisclosure.findings?.map((f,i)=><div key={i} style={{fontSize:'11.5px',color:C.inkMute}}><strong style={{color:C.inkSub}}>{f.label}:</strong> {f.value}</div>)}
+                      {b2PreviewData.sourceStructureDisclosure.note&&<div style={{fontSize:'11.5px',color:C.inkMute,marginTop:'4px'}}>{b2PreviewData.sourceStructureDisclosure.note}</div>}
+                    </div>
+                  )}
+                </>;
+              })() : (()=>{
+                const source=b2SourcePreviewData;
+                if(!source||source.availability!=='AVAILABLE') return <div style={{padding:'14px',fontSize:'12px',color:C.inkMute}}>Original source preview unavailable for the selected worksheet.</div>;
+                return <>
+                  <div style={{display:'flex',gap:'7px',flexWrap:'wrap'}}>
+                    <Pill color="#3B7D4F">AVAILABLE</Pill>
+                    <Pill color="#3B4A73">Physical rows: {source.totalSourceRows}</Pill>
+                    <Pill color="#3B4A73">Displayed: {source.displayedRowCount}</Pill>
+                    <Pill color="#3B4A73">Columns: {source.columns.length}</Pill>
+                    {source.truncated&&<Pill color="#B08A2E">First 100 rows shown</Pill>}
+                    <Pill color="#9A9484">Not persisted</Pill>
+                  </div>
+                  <div style={{fontSize:'11.5px',color:C.inkMute}}>Raw source values are shown in physical worksheet order. No profile normalization is applied.</div>
+                  <div style={{overflowX:'auto',maxHeight:'460px',overflowY:'auto',border:`1px solid ${C.borderSoft}`,borderRadius:'8px',maxWidth:'100%'}}>
+                    <table style={{borderCollapse:'collapse',fontSize:'11.5px',width:'max-content',minWidth:'100%'}}>
+                      <thead><tr>
+                        <th style={{textAlign:'left',padding:'6px 8px',position:'sticky',top:0,left:0,background:C.panelAlt,zIndex:3,whiteSpace:'nowrap'}}>Worksheet Row</th>
+                        {source.columns.map(col=><th key={col.key} title={col.sourceLabel} style={{textAlign:'left',padding:'6px 8px',position:'sticky',top:0,background:C.panelAlt,whiteSpace:'nowrap'}}>{source.representation==='MATRIX'?col.worksheetColumn:col.sourceLabel}</th>)}
+                      </tr></thead>
+                      <tbody>{source.rows.map((row,ri)=><tr key={`${row.sourceRowNumber}-${ri}`} style={{borderTop:`1px solid ${C.borderSoft}`}}>
+                        <td style={{padding:'5px 8px',position:'sticky',left:0,background:C.panel,color:C.inkFaint,whiteSpace:'nowrap'}}>{row.sourceRowNumber}</td>
+                        {row.cells.map((cell,ci)=><td key={ci} style={{padding:'5px 8px',whiteSpace:'nowrap',maxWidth:'360px',overflow:'hidden',textOverflow:'ellipsis'}} title={cell.rawValue==null?'':String(cell.rawValue)}>{cell.displayValue===''||cell.displayValue==null?<span style={{color:C.inkFaint}}>—</span>:String(cell.displayValue)}</td>)}
+                      </tr>)}</tbody>
+                    </table>
+                  </div>
+                </>;
+              })()}
+              <div style={{padding:'10px 12px',borderRadius:'8px',background:'#EEF1F7',fontSize:'11.5px',color:C.inkMute}}>
+                Profile-specific validation and Import Summary are being completed in the next controlled packages. No import or persistence is available.
               </div>
-              <div style={{display:'flex',gap:'8px'}}>
+              <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
                 <Btn variant="ghost" onClick={()=>setStage('mapping')}>Back to Column Mapping</Btn>
-                <Btn variant="primary" onClick={()=>setStage('validation')}>Continue to Validation Review</Btn>
+                <Btn variant="ghost" onClick={()=>setStage('classify')}>Back to Classification</Btn>
+                <Btn variant="ghost" onClick={()=>setStage('review')}>Back to Workbook Review</Btn>
+                <Btn variant="danger" onClick={wmisB2DiscardPreviewOnly}>Discard Preview</Btn>
+                <Btn variant="danger" onClick={resetAll}>Clear File</Btn>
+                <Btn variant="primary" disabled aria-disabled="true" title="Available in Package C">Continue to Validation Review</Btn>
               </div>
             </div>
           )}
-
           {stage==='validation' && (
             <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
               <div style={{fontSize:'13px',fontWeight:600,color:C.ink}}>Validation Review</div>
